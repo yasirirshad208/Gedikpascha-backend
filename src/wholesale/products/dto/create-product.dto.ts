@@ -113,6 +113,14 @@ export class ProductPackSizeDto {
   @IsOptional()
   @IsObject()
   stockMatrix?: Record<string, number>;
+
+  @IsOptional()
+  @IsBoolean()
+  hasFixedQuantities?: boolean;
+
+  @IsOptional()
+  @IsObject()
+  fixedQuantities?: Record<string, number>;
 }
 
 export class CreateProductDto {

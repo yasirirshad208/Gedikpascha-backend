@@ -143,9 +143,13 @@ export class ProductsController {
   }
 
   @Get('slug/:slug')
-  async getProductBySlug(@Param('slug') slug: string) {
+  async getProductBySlug(
+    @Param('slug') slug: string,
+    @Headers('authorization') authHeader?: string,
+  ) {
     try {
-      return await this.productsService.getProductBySlug(slug);
+      const user = authHeader ? await this.getUserFromToken(authHeader) : null;
+      return await this.productsService.getProductBySlug(slug, user?.id);
     } catch (error) {
       console.error('Error in getProductBySlug controller:', error);
       throw error;

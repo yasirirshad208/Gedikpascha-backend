@@ -461,7 +461,7 @@ export class BrandsService {
     };
   }
 
-  async getBrandProducts(brandId: string, page = 1, limit = 20) {
+  async getBrandProducts(brandId: string, page = 1, limit = 20, filter?: string) {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Verify brand exists and is approved
@@ -478,13 +478,32 @@ export class BrandsService {
 
     const offset = (page - 1) * limit;
 
-    // Get products
-    const { data: products, error: productsError, count } = await serviceClient
+    // Build query based on filter
+    let query = serviceClient
       .from('wholesale_products')
       .select('*', { count: 'exact' })
       .eq('wholesale_brand_id', brandId)
       .eq('status', 'active')
-      .is('deleted_at', null)
+      .is('deleted_at', null);
+
+    // Apply filters
+    switch (filter) {
+      case 'sale':
+        query = query.gt('sale_percentage', 0);
+        break;
+      case 'best-products':
+        query = query.eq('is_featured', true);
+        break;
+      case 'recent':
+        // Recent products (already ordered by created_at desc)
+        break;
+      case 'all':
+      default:
+        // No additional filter
+        break;
+    }
+
+    const { data: products, error: productsError, count } = await query
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -531,6 +550,8 @@ export class BrandsService {
         basePrice: product.wholesale_price ? parseFloat(product.wholesale_price) : 0,
         minOrderQuantity: product.min_order_quantity,
         status: product.status,
+        sale_percentage: product.sale_percentage,
+        is_featured: product.is_featured,
         images: images.map((img: any) => ({
           id: img.id,
           url: img.image_url,

@@ -118,10 +118,11 @@ export class BrandsController {
     @Param('brandName') brandName: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number = 1,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number = 20,
+    @Query('filter') filter?: string,
   ) {
     // First get the brand to get its ID
     const brand = await this.brandsService.getBrandByName(brandName);
-    return this.brandsService.getBrandProducts(brand.id, page, limit);
+    return this.brandsService.getBrandProducts(brand.id, page, limit, filter);
   }
 
   // Public endpoint to get brand products (only for approved brands)

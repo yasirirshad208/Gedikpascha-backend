@@ -226,6 +226,7 @@ export class ProductsService {
             is_best_value: pack.isBestValue,
             is_available: pack.isAvailable,
             display_order: pack.displayOrder !== undefined ? pack.displayOrder : index,
+            has_fixed_quantities: pack.hasFixedQuantities || false,
           })
           .select()
           .single();
@@ -272,6 +273,23 @@ export class ProductsService {
             console.error('Failed to create stock matrix:', stockMatrixError);
           }
         }
+
+        // Insert fixed quantities if provided and hasFixedQuantities is true
+        if (pack.hasFixedQuantities && pack.fixedQuantities && Object.keys(pack.fixedQuantities).length > 0) {
+          const fixedQuantityRecords = Object.entries(pack.fixedQuantities).map(([key, quantity]) => ({
+            pack_size_id: packSize.id,
+            combination_key: key,
+            fixed_quantity: quantity,
+          }));
+
+          const { error: fixedQuantitiesError } = await serviceClient
+            .from('wholesale_pack_fixed_quantities')
+            .insert(fixedQuantityRecords);
+
+          if (fixedQuantitiesError) {
+            console.error('Failed to create fixed quantities:', fixedQuantitiesError);
+          }
+        }
       }
     }
 
@@ -280,6 +298,10 @@ export class ProductsService {
   }
 
   async getProductById(productId: string, userId: string) {
+    return this.getProductComplete(productId, userId, true);
+  }
+
+  async getProductComplete(productId: string, userId?: string, verifyOwnership = false) {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Get product with brand info
@@ -296,8 +318,8 @@ export class ProductsService {
       throw new NotFoundException('Product not found.');
     }
 
-    // Verify user owns the brand
-    if (product.wholesale_brands.user_id !== userId) {
+    // Verify user owns the brand if required
+    if (verifyOwnership && userId && product.wholesale_brands.user_id !== userId) {
       throw new UnauthorizedException('You do not have permission to access this product.');
     }
 
@@ -322,10 +344,11 @@ export class ProductsService {
       .eq('product_id', productId)
       .order('display_order', { ascending: true });
 
-    // Get pack variations and stock matrix for each pack size
+    // Get pack variations, stock matrix, and fixed quantities for each pack size
     const packSizeIds = (packSizes || []).map(p => p.id);
     let packVariations: any[] = [];
     let stockMatrix: any[] = [];
+    let fixedQuantities: any[] = [];
 
     if (packSizeIds.length > 0) {
       const { data: variations } = await serviceClient
@@ -342,19 +365,38 @@ export class ProductsService {
         .in('pack_size_id', packSizeIds);
 
       stockMatrix = matrix || [];
+
+      const { data: fixed } = await serviceClient
+        .from('wholesale_pack_fixed_quantities')
+        .select('*')
+        .in('pack_size_id', packSizeIds);
+
+      fixedQuantities = fixed || [];
     }
 
-    // Map pack variations and stock matrix to pack sizes
-    const packSizesWithDetails = (packSizes || []).map(pack => ({
-      ...pack,
-      variations: packVariations.filter(v => v.pack_size_id === pack.id),
-      stockMatrix: stockMatrix
-        .filter(s => s.pack_size_id === pack.id)
+    // Map pack variations, stock matrix, and fixed quantities to pack sizes
+    const packSizesWithDetails = (packSizes || []).map(pack => {
+      const packFixedQuantities = fixedQuantities
+        .filter(f => f.pack_size_id === pack.id)
         .reduce((acc, item) => {
-          acc[item.combination_key] = item.stock_quantity;
+          acc[item.combination_key] = item.fixed_quantity;
           return acc;
-        }, {} as Record<string, number>),
-    }));
+        }, {} as Record<string, number>);
+
+      return {
+        ...pack,
+        variations: packVariations.filter(v => v.pack_size_id === pack.id),
+        stockMatrix: stockMatrix
+          .filter(s => s.pack_size_id === pack.id)
+          .reduce((acc, item) => {
+            acc[item.combination_key] = item.stock_quantity;
+            return acc;
+          }, {} as Record<string, number>),
+        fixedQuantities: packFixedQuantities,
+        // Ensure has_fixed_quantities reflects actual data
+        has_fixed_quantities: pack.has_fixed_quantities || Object.keys(packFixedQuantities).length > 0,
+      };
+    });
 
     return {
       ...product,
@@ -676,10 +718,16 @@ export class ProductsService {
 
       const existingPackSizeIds = (existingPackSizes || []).map(p => p.id);
 
-      // Delete existing stock matrix entries for these pack sizes
+      // Delete existing stock matrix and fixed quantities entries for these pack sizes
       if (existingPackSizeIds.length > 0) {
         await serviceClient
           .from('wholesale_pack_stock_matrix')
+          .delete()
+          .in('pack_size_id', existingPackSizeIds);
+
+        // Delete existing fixed quantities for these pack sizes
+        await serviceClient
+          .from('wholesale_pack_fixed_quantities')
           .delete()
           .in('pack_size_id', existingPackSizeIds);
 
@@ -714,6 +762,7 @@ export class ProductsService {
               is_best_value: pack.isBestValue,
               is_available: pack.isAvailable,
               display_order: pack.displayOrder !== undefined ? pack.displayOrder : index,
+              has_fixed_quantities: pack.hasFixedQuantities || false,
             })
             .select()
             .single();
@@ -758,6 +807,23 @@ export class ProductsService {
 
             if (stockMatrixError) {
               console.error('Failed to update stock matrix:', stockMatrixError);
+            }
+
+            // Insert fixed quantities if provided and hasFixedQuantities is true
+            if (pack.hasFixedQuantities && pack.fixedQuantities && Object.keys(pack.fixedQuantities).length > 0) {
+              const fixedQuantityRecords = Object.entries(pack.fixedQuantities).map(([key, quantity]) => ({
+                pack_size_id: packSize.id,
+                combination_key: key,
+                fixed_quantity: quantity,
+              }));
+
+              const { error: fixedQuantitiesError } = await serviceClient
+                .from('wholesale_pack_fixed_quantities')
+                .insert(fixedQuantityRecords);
+
+              if (fixedQuantitiesError) {
+                console.error('Failed to update fixed quantities:', fixedQuantitiesError);
+              }
             }
           }
         }
@@ -1142,10 +1208,10 @@ export class ProductsService {
     };
   }
 
-  async getProductBySlug(slug: string) {
+  async getProductBySlug(slug: string, userId?: string) {
     const serviceClient = this.supabaseService.getServiceClient();
 
-    // Get product from active_wholesale_products view (only active products with approved brands)
+    // First try to get from active_wholesale_products view (only active products with approved brands)
     const { data: product, error: productError } = await serviceClient
       .from('active_wholesale_products')
       .select('*')
@@ -1158,9 +1224,37 @@ export class ProductsService {
       );
     }
 
-    if (!product) {
-      throw new NotFoundException('Product not found.');
+    // If product found and active, get complete product data with relations
+    if (product) {
+      return this.getProductComplete(product.id, userId, false);
     }
+
+    // If not found in active products and we have a user ID, check if user owns this product
+    if (userId) {
+      const { data: ownedProduct, error: ownedError } = await serviceClient
+        .from('wholesale_products')
+        .select(`
+          *,
+          wholesale_brands!inner(user_id, status)
+        `)
+        .eq('slug', slug)
+        .eq('wholesale_brands.user_id', userId)
+        .maybeSingle();
+
+      if (ownedError) {
+        throw new BadRequestException(
+          `Failed to fetch product: ${ownedError.message || 'Unknown error'}`,
+        );
+      }
+
+      if (ownedProduct) {
+        // Return complete product data for owned products
+        return this.getProductComplete(ownedProduct.id, userId, false);
+      }
+    }
+
+    // Product not found or user doesn't have permission
+    throw new NotFoundException('Product not found.');
 
     // Get images
     const { data: images } = await serviceClient
@@ -1183,10 +1277,11 @@ export class ProductsService {
       .eq('product_id', product.id)
       .order('display_order', { ascending: true });
 
-    // Get pack variations and stock matrix for each pack size
+    // Get pack variations, stock matrix, and fixed quantities for each pack size
     const packSizeIds = (packSizes || []).map(p => p.id);
     let packVariations: any[] = [];
     let stockMatrix: any[] = [];
+    let fixedQuantities: any[] = [];
 
     if (packSizeIds.length > 0) {
       const { data: pvariations } = await serviceClient
@@ -1203,9 +1298,16 @@ export class ProductsService {
         .in('pack_size_id', packSizeIds);
 
       stockMatrix = matrix || [];
+
+      const { data: fixed } = await serviceClient
+        .from('wholesale_pack_fixed_quantities')
+        .select('*')
+        .in('pack_size_id', packSizeIds);
+
+      fixedQuantities = fixed || [];
     }
 
-    // Map pack variations and stock matrix to pack sizes
+    // Map pack variations, stock matrix, and fixed quantities to pack sizes
     const packSizesWithDetails = (packSizes || []).map(pack => ({
       ...pack,
       variations: packVariations.filter(v => v.pack_size_id === pack.id),
@@ -1213,6 +1315,12 @@ export class ProductsService {
         .filter(s => s.pack_size_id === pack.id)
         .reduce((acc, item) => {
           acc[item.combination_key] = item.stock_quantity;
+          return acc;
+        }, {} as Record<string, number>),
+      fixedQuantities: fixedQuantities
+        .filter(f => f.pack_size_id === pack.id)
+        .reduce((acc, item) => {
+          acc[item.combination_key] = item.fixed_quantity;
           return acc;
         }, {} as Record<string, number>),
     }));
