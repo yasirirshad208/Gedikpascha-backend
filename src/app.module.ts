@@ -9,11 +9,13 @@ import { CartModule } from './wholesale/cart/cart.module';
 import { OrdersModule } from './wholesale/orders/orders.module';
 import { FavouritesModule } from './wholesale/favourites/favourites.module';
 import { ReviewsModule } from './wholesale/reviews/reviews.module';
+import { RetailBrandsModule } from './retail/brands/brands.module';
+import { RetailProductsModule } from './retail/products/products.module';
 import { AdminModule } from './admin/admin.module';
 import { PublicCategoriesModule } from './public/categories/categories.module';
 
 @Module({
-  imports: [SupabaseModule, AuthModule, BrandsModule, ProductsModule, CartModule, OrdersModule, FavouritesModule, ReviewsModule, AdminModule, PublicCategoriesModule],
+  imports: [SupabaseModule, AuthModule, BrandsModule, ProductsModule, CartModule, OrdersModule, FavouritesModule, ReviewsModule, RetailBrandsModule, RetailProductsModule, AdminModule, PublicCategoriesModule],
   controllers: [AppController],
   providers: [AppService],
 })
