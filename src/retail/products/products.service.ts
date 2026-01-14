@@ -367,32 +367,37 @@ export class RetailProductsService {
   }
 
   async getProductBySlug(slug: string) {
-    console.log('[getProductBySlug] Called with slug:', slug);
-    
+    console.log('[getProductBySlug] Starting, slug:', slug);
     const supabase = this.supabaseService.getServiceClient();
 
     // Get product by slug with all related data
-    const { data: product, error } = await supabase
+    const { data: products, error } = await supabase
       .from('retail_products')
       .select(`
         *,
-        retail_brands!inner(id, display_name, logo_url, status, description, followers_count, rating),
+        retail_brands!inner(id, display_name, logo_url, status, description),
         retail_product_images(id, image_url, display_order, is_primary)
       `)
       .eq('slug', slug)
       .eq('status', 'active')
       .eq('retail_brands.status', 'approved')
-      .is('deleted_at', null)
-      .single();
+      .is('deleted_at', null);
 
-    console.log('[getProductBySlug] Query result:', { product, error });
+    console.log('[getProductBySlug] Query result:', { 
+      hasError: !!error, 
+      error: error?.message,
+      productsCount: products?.length,
+      productName: products?.[0]?.name 
+    });
 
-    if (error || !product) {
-      console.error('Product not found or error:', error);
+    if (error || !products || products.length === 0) {
+      console.error('[getProductBySlug] Product not found, error:', error);
       throw new NotFoundException('Product not found');
     }
 
-    // Get related products (same brand or category)
+    const product = products[0];
+
+    // Get related products (same brand)
     const { data: relatedProducts } = await supabase
       .from('retail_products')
       .select(`
@@ -401,18 +406,16 @@ export class RetailProductsService {
         slug,
         retail_price,
         sale_percentage,
-        retail_brands!inner(display_name),
-        retail_product_images!inner(image_url, is_primary)
+        retail_brands!inner(display_name, status),
+        retail_product_images(image_url, is_primary)
       `)
       .eq('status', 'active')
       .eq('retail_brands.status', 'approved')
       .is('deleted_at', null)
       .neq('id', product.id)
-      .or(`retail_brand_id.eq.${product.retail_brand_id}`)
+      .eq('retail_brand_id', product.retail_brand_id)
       .order('created_at', { ascending: false })
       .limit(8);
-
-    console.log('[getProductBySlug] Related products:', relatedProducts);
 
     return {
       ...product,
