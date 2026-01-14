@@ -376,7 +376,9 @@ export class RetailProductsService {
       .select(`
         *,
         retail_brands!inner(id, display_name, logo_url, status, description),
-        retail_product_images(id, image_url, display_order, is_primary)
+        retail_product_images(id, image_url, display_order, is_primary),
+        retail_product_variations(id, variation_type, name, value, is_available, display_order),
+        retail_product_inventory(id, combination_key, stock_quantity)
       `)
       .eq('slug', slug)
       .eq('status', 'active')
@@ -407,7 +409,8 @@ export class RetailProductsService {
         retail_price,
         sale_percentage,
         retail_brands!inner(display_name, status),
-        retail_product_images(image_url, is_primary)
+        retail_product_images(image_url, is_primary),
+        retail_product_variations(id, variation_type, name, value, is_available, display_order)
       `)
       .eq('status', 'active')
       .eq('retail_brands.status', 'approved')

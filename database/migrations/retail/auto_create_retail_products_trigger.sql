@@ -143,55 +143,101 @@ BEGIN
             v_variation.display_order
           );
         END LOOP;
+        
+        -- Copy pack-level variations (unique variations from the purchased pack)
+        FOR v_variation IN 
+          SELECT DISTINCT ON (variation_type, name)
+            variation_type,
+            name,
+            value,
+            is_available,
+            display_order
+          FROM wholesale_pack_variations
+          WHERE pack_size_id = v_order_item.pack_size_id
+          ORDER BY variation_type, name, display_order
+        LOOP
+          INSERT INTO retail_product_variations (
+            product_id,
+            variation_type,
+            name,
+            value,
+            is_available,
+            display_order
+          ) VALUES (
+            v_retail_product_id,
+            v_variation.variation_type,
+            v_variation.name,
+            v_variation.value,
+            v_variation.is_available,
+            v_variation.display_order
+          )
+          ON CONFLICT DO NOTHING;
+        END LOOP;
       END IF;
       
-      -- Add inventory tracking (for variation combinations if any)
-      IF v_order_item.selected_variations IS NOT NULL AND 
-         jsonb_typeof(v_order_item.selected_variations) = 'object' THEN
+      -- Add inventory tracking for all variation combinations in the pack
+      -- Get all variation combinations from wholesale_pack_stock_matrix
+      DECLARE
+        v_combination_count INTEGER;
+        v_quantity_per_combination INTEGER;
+      BEGIN
+        -- Count how many variation combinations exist for this pack
+        SELECT COUNT(DISTINCT combination_key)
+        INTO v_combination_count
+        FROM wholesale_pack_stock_matrix
+        WHERE pack_size_id = v_order_item.pack_size_id
+          AND stock_quantity > 0;
         
-        -- Build combination key from selected variations
-        SELECT string_agg(value::text, '-' ORDER BY key)
-        INTO v_combination_key
-        FROM jsonb_each_text(v_order_item.selected_variations);
-        
-        -- Insert or update inventory for this combination
-        INSERT INTO retail_product_inventory (
-          product_id,
-          combination_key,
-          stock_quantity,
-          source_wholesale_order_item_id,
-          added_at
-        ) VALUES (
-          v_retail_product_id,
-          COALESCE(v_combination_key, 'default'),
-          v_total_quantity,
-          v_order_item.id,
-          NOW()
-        )
-        ON CONFLICT (product_id, combination_key, source_wholesale_order_item_id)
-        DO UPDATE SET
-          stock_quantity = retail_product_inventory.stock_quantity + v_total_quantity,
-          updated_at = NOW();
-      ELSE
-        -- No variations, use default combination
-        INSERT INTO retail_product_inventory (
-          product_id,
-          combination_key,
-          stock_quantity,
-          source_wholesale_order_item_id,
-          added_at
-        ) VALUES (
-          v_retail_product_id,
-          'default',
-          v_total_quantity,
-          v_order_item.id,
-          NOW()
-        )
-        ON CONFLICT (product_id, combination_key, source_wholesale_order_item_id)
-        DO UPDATE SET
-          stock_quantity = retail_product_inventory.stock_quantity + v_total_quantity,
-          updated_at = NOW();
-      END IF;
+        IF v_combination_count > 0 THEN
+          -- Distribute the total quantity evenly across all combinations
+          v_quantity_per_combination := v_total_quantity / v_combination_count;
+          
+          -- Insert inventory for each variation combination in the pack
+          FOR v_variation IN
+            SELECT DISTINCT combination_key
+            FROM wholesale_pack_stock_matrix
+            WHERE pack_size_id = v_order_item.pack_size_id
+              AND stock_quantity > 0
+          LOOP
+            INSERT INTO retail_product_inventory (
+              product_id,
+              combination_key,
+              stock_quantity,
+              source_wholesale_order_item_id,
+              added_at
+            ) VALUES (
+              v_retail_product_id,
+              v_variation.combination_key,
+              v_quantity_per_combination,
+              v_order_item.id,
+              NOW()
+            )
+            ON CONFLICT (product_id, combination_key, source_wholesale_order_item_id)
+            DO UPDATE SET
+              stock_quantity = retail_product_inventory.stock_quantity + v_quantity_per_combination,
+              updated_at = NOW();
+          END LOOP;
+        ELSE
+          -- No stock matrix, use default
+          INSERT INTO retail_product_inventory (
+            product_id,
+            combination_key,
+            stock_quantity,
+            source_wholesale_order_item_id,
+            added_at
+          ) VALUES (
+            v_retail_product_id,
+            'default',
+            v_total_quantity,
+            v_order_item.id,
+            NOW()
+          )
+          ON CONFLICT (product_id, combination_key, source_wholesale_order_item_id)
+          DO UPDATE SET
+            stock_quantity = retail_product_inventory.stock_quantity + v_total_quantity,
+            updated_at = NOW();
+        END IF;
+      END;
       
     END LOOP;
     
