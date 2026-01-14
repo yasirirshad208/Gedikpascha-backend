@@ -245,8 +245,9 @@ export class RetailProductsService {
     search?: string,
     page: number = 1,
     limit: number = 24,
+    filter?: 'all' | 'sale' | 'best-products' | 'recent',
   ) {
-    console.log('[getPublicProducts] Called with params:', { brandId, sortBy, priceRange, search, page, limit });
+    console.log('[getPublicProducts] Called with params:', { brandId, sortBy, priceRange, search, page, limit, filter });
     
     const supabase = this.supabaseService.getServiceClient();
 
@@ -267,6 +268,27 @@ export class RetailProductsService {
     // Apply brand filter
     if (brandId) {
       query = query.eq('retail_brand_id', brandId);
+    }
+
+    // Apply tab filter
+    if (filter) {
+      switch (filter) {
+        case 'sale':
+          // Only products with sale_percentage > 0
+          query = query.gt('sale_percentage', 0);
+          break;
+        case 'best-products':
+          // TODO: Implement based on ratings/reviews when available
+          // For now, just order by created date
+          break;
+        case 'recent':
+          // Will be handled by default sorting
+          break;
+        case 'all':
+        default:
+          // No additional filter
+          break;
+      }
     }
 
     // Apply price range filter
@@ -375,7 +397,7 @@ export class RetailProductsService {
       .from('retail_products')
       .select(`
         *,
-        retail_brands!inner(id, display_name, logo_url, status, description),
+        retail_brands!inner(id, brand_name, display_name, logo_url, status, description),
         retail_product_images(id, image_url, display_order, is_primary),
         retail_product_variations(id, variation_type, name, value, is_available, display_order),
         retail_product_inventory(id, combination_key, stock_quantity)
@@ -389,7 +411,8 @@ export class RetailProductsService {
       hasError: !!error, 
       error: error?.message,
       productsCount: products?.length,
-      productName: products?.[0]?.name 
+      productName: products?.[0]?.name,
+      brandData: products?.[0]?.retail_brands
     });
 
     if (error || !products || products.length === 0) {

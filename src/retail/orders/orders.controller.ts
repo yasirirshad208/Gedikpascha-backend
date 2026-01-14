@@ -6,11 +6,12 @@ import {
   Param,
   Patch,
   Query,
-  UseGuards,
-  Req,
+  Headers,
   ParseIntPipe,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
+import { SupabaseService } from '../../supabase/supabase.service';
 import {
   CreateRetailOrderDto,
   UpdateRetailOrderStatusDto,
@@ -19,21 +20,49 @@ import {
 
 @Controller('retail/orders')
 export class OrdersController {
-  constructor(private readonly ordersService: OrdersService) {}
+  constructor(
+    private readonly ordersService: OrdersService,
+    private readonly supabaseService: SupabaseService,
+  ) {}
+
+  private async getUserFromToken(authHeader?: string) {
+    const token = authHeader?.replace('Bearer ', '');
+    if (!token) {
+      return null; // Allow guest orders
+    }
+
+    try {
+      const supabase = this.supabaseService.getClient();
+      const { data: userData, error } = await supabase.auth.getUser(token);
+
+      if (error || !userData.user) {
+        return null;
+      }
+
+      return userData.user;
+    } catch {
+      return null;
+    }
+  }
 
   @Post()
-  async createOrder(@Body() createOrderDto: CreateRetailOrderDto, @Req() req) {
-    const userId = req.user?.id;
+  async createOrder(
+    @Body() createOrderDto: CreateRetailOrderDto,
+    @Headers('authorization') authHeader: string,
+  ) {
+    const user = await this.getUserFromToken(authHeader);
+    const userId = user?.id;
     return this.ordersService.createOrder(createOrderDto, userId);
   }
 
   @Get()
   async getUserOrders(
-    @Req() req,
+    @Headers('authorization') authHeader: string,
     @Query('page', new ParseIntPipe({ optional: true })) page: number = 1,
     @Query('limit', new ParseIntPipe({ optional: true })) limit: number = 10,
   ) {
-    const userId = req.user?.id;
+    const user = await this.getUserFromToken(authHeader);
+    const userId = user?.id;
     if (!userId) {
       return { orders: [], pagination: { page: 1, limit: 10, total: 0, pages: 0 } };
     }
@@ -41,8 +70,12 @@ export class OrdersController {
   }
 
   @Get(':id')
-  async getOrderById(@Param('id') id: string, @Req() req) {
-    const userId = req.user?.id;
+  async getOrderById(
+    @Param('id') id: string,
+    @Headers('authorization') authHeader: string,
+  ) {
+    const user = await this.getUserFromToken(authHeader);
+    const userId = user?.id;
     return this.ordersService.getOrderById(id, userId);
   }
 
@@ -50,9 +83,10 @@ export class OrdersController {
   async updateOrderStatus(
     @Param('id') id: string,
     @Body() updateDto: UpdateRetailOrderStatusDto,
-    @Req() req,
+    @Headers('authorization') authHeader: string,
   ) {
-    const userId = req.user?.id;
+    const user = await this.getUserFromToken(authHeader);
+    const userId = user?.id;
     return this.ordersService.updateOrderStatus(id, updateDto, userId);
   }
 
@@ -60,9 +94,10 @@ export class OrdersController {
   async updatePaymentStatus(
     @Param('id') id: string,
     @Body() updateDto: UpdateRetailPaymentStatusDto,
-    @Req() req,
+    @Headers('authorization') authHeader: string,
   ) {
-    const userId = req.user?.id;
+    const user = await this.getUserFromToken(authHeader);
+    const userId = user?.id;
     return this.ordersService.updatePaymentStatus(id, updateDto, userId);
   }
 }

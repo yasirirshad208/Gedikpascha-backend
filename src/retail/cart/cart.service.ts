@@ -124,6 +124,7 @@ export class CartService {
     // Calculate summary
     const summary = {
       subtotal: transformedItems.reduce((sum, item) => sum + item.itemTotal, 0),
+      total: transformedItems.reduce((sum, item) => sum + item.itemTotal, 0),
       totalItems: transformedItems.length,
       totalPieces: transformedItems.reduce((sum, item) => sum + item.quantity, 0),
       itemCount: transformedItems.length,

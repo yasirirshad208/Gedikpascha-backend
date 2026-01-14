@@ -30,10 +30,11 @@ export class RetailProductsController {
     @Query('sortBy') sortBy?: 'price_asc' | 'price_desc' | 'newest' | 'popular',
     @Query('priceRange') priceRange?: 'under_50' | '50_100' | '100_200' | 'over_200',
     @Query('search') search?: string,
+    @Query('filter') filter?: 'all' | 'sale' | 'best-products' | 'recent',
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number = 1,
     @Query('limit', new DefaultValuePipe(24), ParseIntPipe) limit: number = 24,
   ) {
-    return this.productsService.getPublicProducts(brandId, sortBy, priceRange, search, page, limit);
+    return this.productsService.getPublicProducts(brandId, sortBy, priceRange, search, page, limit, filter);
   }
 
   @Get('slug/:slug')

@@ -77,7 +77,7 @@ export class OrdersService {
         // Check stock for variation
         const { data: inventory, error: inventoryError } = await serviceClient
           .from('retail_product_inventory')
-          .select('quantity')
+          .select('stock_quantity')
           .eq('product_id', item.productId)
           .eq('combination_key', item.combinationKey)
           .single();
@@ -88,9 +88,9 @@ export class OrdersService {
           );
         }
 
-        if (inventory.quantity < item.quantity) {
+        if (inventory.stock_quantity < item.quantity) {
           throw new BadRequestException(
-            `Insufficient stock for ${item.productName}. Available: ${inventory.quantity}, Requested: ${item.quantity}`,
+            `Insufficient stock for ${item.productName}. Available: ${inventory.stock_quantity}, Requested: ${item.quantity}`,
           );
         }
 
