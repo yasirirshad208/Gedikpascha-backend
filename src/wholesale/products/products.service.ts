@@ -118,6 +118,25 @@ export class ProductsService {
       }
     }
 
+    // Check if barcode already exists (if provided)
+    if (createProductDto.barcode) {
+      const { data: existingBarcode, error: barcodeCheckError } = await serviceClient
+        .from('wholesale_products')
+        .select('id')
+        .eq('barcode', createProductDto.barcode)
+        .maybeSingle();
+
+      if (barcodeCheckError) {
+        throw new BadRequestException(
+          `Failed to check barcode availability: ${barcodeCheckError.message || 'Unknown error'}`,
+        );
+      }
+
+      if (existingBarcode) {
+        throw new BadRequestException('A product with this barcode already exists.');
+      }
+    }
+
     // Prepare product data for insertion
     const productData: any = {
       wholesale_brand_id: brand.id,
@@ -130,6 +149,10 @@ export class ProductsService {
       short_description: createProductDto.shortDescription || null,
       wholesale_price: createProductDto.wholesalePrice,
       sale_percentage: createProductDto.salePercentage || 0,
+      retail_price: createProductDto.retailPrice || null,
+      barcode: createProductDto.barcode || null,
+      vat_rate: createProductDto.vatRate || null,
+      model_code: createProductDto.modelCode || null,
       min_order_quantity: createProductDto.minOrderQuantity,
       min_order_amount: createProductDto.minOrderAmount || null,
       stock_quantity: createProductDto.stockQuantity,

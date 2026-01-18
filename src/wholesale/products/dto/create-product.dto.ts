@@ -161,6 +161,25 @@ export class CreateProductDto {
   @Max(100)
   salePercentage?: number;
 
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  retailPrice?: number;
+
+  @IsOptional()
+  @IsString()
+  barcode?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  vatRate?: number;
+
+  @IsOptional()
+  @IsString()
+  modelCode?: string;
+
   // MOQ
   @IsNumber()
   @Min(1)
