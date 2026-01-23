@@ -13,11 +13,12 @@ import { RetailBrandsModule } from './retail/brands/brands.module';
 import { RetailProductsModule } from './retail/products/products.module';
 import { RetailCartModule } from './retail/cart/cart.module';
 import { RetailOrdersModule } from './retail/orders/orders.module';
+import { RetailModule } from './retail/retail.module';
 import { AdminModule } from './admin/admin.module';
 import { PublicCategoriesModule } from './public/categories/categories.module';
 
 @Module({
-  imports: [SupabaseModule, AuthModule, BrandsModule, ProductsModule, CartModule, OrdersModule, FavouritesModule, ReviewsModule, RetailBrandsModule, RetailProductsModule, RetailCartModule, RetailOrdersModule, AdminModule, PublicCategoriesModule],
+  imports: [SupabaseModule, AuthModule, BrandsModule, ProductsModule, CartModule, OrdersModule, FavouritesModule, ReviewsModule, RetailBrandsModule, RetailProductsModule, RetailCartModule, RetailOrdersModule, RetailModule, AdminModule, PublicCategoriesModule],
   controllers: [AppController],
   providers: [AppService],
 })

@@ -23,11 +23,8 @@ export class RetailProductsService {
       .eq('status', 'approved')
       .single();
 
-    console.log('Retail brand query:', { userId, retailBrand, brandError });
-
     if (brandError || !retailBrand) {
       // Return empty array if no retail brand found (not an error)
-      console.log('No retail brand found for user:', userId);
       return [];
     }
 
@@ -59,8 +56,6 @@ export class RetailProductsService {
 
     const { data: products, error } = await query;
 
-    console.log('Products query result:', { productsCount: products?.length, error });
-
     if (error) {
       console.error('Error fetching retail products:', error);
       // Return empty array instead of throwing error if table doesn't exist yet
@@ -73,8 +68,6 @@ export class RetailProductsService {
   async getProductById(productId: string, userId: string) {
     const supabase = this.supabaseService.getServiceClient();
 
-    console.log('Getting product by ID:', { productId, userId });
-
     // First, get the user's retail brand
     const { data: retailBrand, error: brandError } = await supabase
       .from('retail_brands')
@@ -82,8 +75,6 @@ export class RetailProductsService {
       .eq('user_id', userId)
       .eq('status', 'approved')
       .single();
-
-    console.log('Retail brand lookup:', { retailBrand, brandError });
 
     if (brandError || !retailBrand) {
       throw new NotFoundException('Retail brand not found');
@@ -97,8 +88,6 @@ export class RetailProductsService {
       .eq('retail_brand_id', retailBrand.id)
       .is('deleted_at', null)
       .single();
-
-    console.log('Product query result:', { product, error });
 
     if (error || !product) {
       console.error('Product fetch error:', error);
@@ -247,8 +236,6 @@ export class RetailProductsService {
     limit: number = 24,
     filter?: 'all' | 'sale' | 'best-products' | 'recent',
   ) {
-    console.log('[getPublicProducts] Called with params:', { brandId, sortBy, priceRange, search, page, limit, filter });
-    
     const supabase = this.supabaseService.getServiceClient();
 
     // Build query - only active products with approved brands, include images
@@ -262,8 +249,6 @@ export class RetailProductsService {
       .eq('status', 'active')
       .eq('retail_brands.status', 'approved')
       .is('deleted_at', null);
-
-    console.log('[getPublicProducts] Base query built');
 
     // Apply brand filter
     if (brandId) {
@@ -350,12 +335,6 @@ export class RetailProductsService {
 
     const { data: products, error } = await query;
 
-    console.log('[getPublicProducts] Query result:', { 
-      productsCount: products?.length, 
-      error: error?.message,
-      products: products 
-    });
-
     if (error) {
       console.error('Error fetching public retail products:', error);
       return {
@@ -371,12 +350,6 @@ export class RetailProductsService {
 
     const totalPages = count ? Math.ceil(count / limit) : 0;
 
-    console.log('[getPublicProducts] Returning:', { 
-      productsCount: products?.length, 
-      total: count, 
-      totalPages 
-    });
-
     return {
       products: products || [],
       pagination: {
@@ -389,7 +362,6 @@ export class RetailProductsService {
   }
 
   async getProductBySlug(slug: string) {
-    console.log('[getProductBySlug] Starting, slug:', slug);
     const supabase = this.supabaseService.getServiceClient();
 
     // Get product by slug with all related data
@@ -407,16 +379,7 @@ export class RetailProductsService {
       .eq('retail_brands.status', 'approved')
       .is('deleted_at', null);
 
-    console.log('[getProductBySlug] Query result:', { 
-      hasError: !!error, 
-      error: error?.message,
-      productsCount: products?.length,
-      productName: products?.[0]?.name,
-      brandData: products?.[0]?.retail_brands
-    });
-
     if (error || !products || products.length === 0) {
-      console.error('[getProductBySlug] Product not found, error:', error);
       throw new NotFoundException('Product not found');
     }
 
