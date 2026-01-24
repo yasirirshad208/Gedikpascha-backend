@@ -110,6 +110,7 @@ export class RetailProductsService {
       metaTitle?: string;
       metaDescription?: string;
       lowStockThreshold?: number;
+      preservedQuantity?: number;
     },
   ) {
     const supabase = this.supabaseService.getServiceClient();
@@ -170,6 +171,16 @@ export class RetailProductsService {
       }
     }
 
+    // Validate preserved quantity if provided
+    if (updateData.preservedQuantity !== undefined) {
+      if (updateData.preservedQuantity < 0) {
+        throw new BadRequestException('Preserved quantity cannot be negative');
+      }
+      if (updateData.preservedQuantity > existingProduct.stock_quantity) {
+        throw new BadRequestException('Preserved quantity cannot exceed total stock quantity');
+      }
+    }
+
     // Validate status change
     if (updateData.status === 'active') {
       const retailPrice = updateData.retailPrice ?? existingProduct.retail_price;
@@ -209,6 +220,9 @@ export class RetailProductsService {
     }
     if (updateData.lowStockThreshold !== undefined) {
       updateObject.low_stock_threshold = updateData.lowStockThreshold;
+    }
+    if (updateData.preservedQuantity !== undefined) {
+      updateObject.preserved_quantity = updateData.preservedQuantity;
     }
 
     // Update the product
@@ -410,5 +424,127 @@ export class RetailProductsService {
       ...product,
       related_products: relatedProducts || [],
     };
+  }
+
+  // Get all inventory rows for a product (with preserved quantity)
+  async getProductInventory(productId: string, userId: string) {
+    const supabase = this.supabaseService.getServiceClient();
+    // Get user's retail brand
+    const { data: retailBrand, error: brandError } = await supabase
+      .from('retail_brands')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('status', 'approved')
+      .single();
+    if (brandError || !retailBrand) throw new NotFoundException('Retail brand not found');
+    // Check product ownership
+    const { data: product, error: prodError } = await supabase
+      .from('retail_products')
+      .select('id')
+      .eq('id', productId)
+      .eq('retail_brand_id', retailBrand.id)
+      .is('deleted_at', null)
+      .single();
+    if (prodError || !product) throw new NotFoundException('Product not found');
+    // Get inventory rows
+    const { data: inventory, error: invError } = await supabase
+      .from('retail_product_inventory')
+      .select('*')
+      .eq('product_id', productId);
+    if (invError) throw new BadRequestException('Failed to fetch inventory');
+    return inventory || [];
+  }
+
+  // Update preserved_quantity for inventory rows
+  async updateInventoryPreservedQuantities(
+    productId: string,
+    userId: string,
+    updates: { id: string; preservedQuantity: number }[]
+  ) {
+    console.log('DEBUG: updateInventoryPreservedQuantities called', { productId, userId, updates });
+    const supabase = this.supabaseService.getServiceClient();
+    // Get user's retail brand
+    const { data: retailBrand, error: brandError } = await supabase
+      .from('retail_brands')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('status', 'approved')
+      .single();
+    if (brandError || !retailBrand) {
+      console.error('DEBUG: Retail brand not found', brandError);
+      throw new NotFoundException('Retail brand not found');
+    }
+    // Check product ownership
+    const { data: product, error: prodError } = await supabase
+      .from('retail_products')
+      .select('id')
+      .eq('id', productId)
+      .eq('retail_brand_id', retailBrand.id)
+      .is('deleted_at', null)
+      .single();
+    if (prodError || !product) {
+      console.error('DEBUG: Product not found', prodError);
+      throw new NotFoundException('Product not found');
+    }
+    // Validate and update each inventory row
+    for (const update of updates) {
+      // Get current row
+      const { data: row, error: rowError } = await supabase
+        .from('retail_product_inventory')
+        .select('stock_quantity, preserved_quantity')
+        .eq('id', update.id)
+        .eq('product_id', productId)
+        .single();
+      if (rowError || !row) {
+        console.error('DEBUG: Inventory row not found', rowError);
+        throw new NotFoundException('Inventory row not found');
+      }
+      const prevPreserved = row.preserved_quantity;
+      const stockQuantity = row.stock_quantity;
+      const diff = update.preservedQuantity - prevPreserved;
+      let newStockQuantity = stockQuantity;
+      if (diff > 0) {
+        // Increase in preserved, subtract from stock
+        newStockQuantity = stockQuantity - diff;
+      } else if (diff < 0) {
+        // Decrease in preserved, add to stock
+        newStockQuantity = stockQuantity + Math.abs(diff);
+      }
+      console.log('DEBUG: Inventory update values', {
+        id: update.id,
+        prevPreserved,
+        stockQuantity,
+        updatePreserved: update.preservedQuantity,
+        diff,
+        newStockQuantity
+      });
+      // Validation: preserved_quantity must not exceed new stock_quantity (after update)
+      if (update.preservedQuantity < 0) {
+        console.error('DEBUG: Preserved quantity negative', { update });
+        throw new BadRequestException('Preserved quantity cannot be negative');
+      }
+      if (update.preservedQuantity > newStockQuantity) {
+        console.error('DEBUG: Preserved quantity exceeds new stock quantity', {
+          updatePreserved: update.preservedQuantity,
+          newStockQuantity,
+          id: update.id
+        });
+        throw new BadRequestException('Preserved quantity cannot exceed available stock after update');
+      }
+      console.log('DEBUG: Updating inventory row', { id: update.id, prevPreserved, preservedQuantity: update.preservedQuantity, newStockQuantity });
+      const { error: updError } = await supabase
+        .from('retail_product_inventory')
+        .update({
+          preserved_quantity: update.preservedQuantity,
+          stock_quantity: newStockQuantity,
+        })
+        .eq('id', update.id)
+        .eq('product_id', productId);
+      if (updError) {
+        console.error('DEBUG: Failed to update inventory row', updError);
+        throw new BadRequestException('Failed to update preserved quantity');
+      }
+    }
+    return { success: true };
   }
 }

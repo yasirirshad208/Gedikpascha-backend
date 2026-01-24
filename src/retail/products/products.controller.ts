@@ -85,6 +85,19 @@ export class RetailProductsController {
     return this.productsService.getProductById(productId, userData.user.id);
   }
 
+  @Get('my-products/:id/inventory')
+  async getProductInventory(
+    @Param('id') productId: string,
+    @Headers('authorization') authHeader?: string,
+  ) {
+    const token = authHeader?.replace('Bearer ', '');
+    if (!token) throw new UnauthorizedException('Authentication required');
+    const supabase = this.supabaseService.getClient();
+    const { data: userData, error } = await supabase.auth.getUser(token);
+    if (error || !userData.user) throw new UnauthorizedException('Invalid or expired token');
+    return this.productsService.getProductInventory(productId, userData.user.id);
+  }
+
   @Put('my-products/:id')
   async updateProduct(
     @Param('id') productId: string,
@@ -117,6 +130,24 @@ export class RetailProductsController {
       productId,
       userData.user.id,
       updateData,
+    );
+  }
+
+  @Put('my-products/:id/inventory')
+  async updateProductInventoryPreserved(
+    @Param('id') productId: string,
+    @Headers('authorization') authHeader: string,
+    @Body() updates: { updates: { id: string; preservedQuantity: number }[] },
+  ) {
+    const token = authHeader?.replace('Bearer ', '');
+    if (!token) throw new UnauthorizedException('Authentication required');
+    const supabase = this.supabaseService.getClient();
+    const { data: userData, error } = await supabase.auth.getUser(token);
+    if (error || !userData.user) throw new UnauthorizedException('Invalid or expired token');
+    return this.productsService.updateInventoryPreservedQuantities(
+      productId,
+      userData.user.id,
+      updates.updates,
     );
   }
 }
