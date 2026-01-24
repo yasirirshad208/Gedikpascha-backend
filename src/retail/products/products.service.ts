@@ -518,18 +518,10 @@ export class RetailProductsService {
         diff,
         newStockQuantity
       });
-      // Validation: preserved_quantity must not exceed new stock_quantity (after update)
+      // Validation: preserved_quantity must not be negative
       if (update.preservedQuantity < 0) {
         console.error('DEBUG: Preserved quantity negative', { update });
         throw new BadRequestException('Preserved quantity cannot be negative');
-      }
-      if (update.preservedQuantity > newStockQuantity) {
-        console.error('DEBUG: Preserved quantity exceeds new stock quantity', {
-          updatePreserved: update.preservedQuantity,
-          newStockQuantity,
-          id: update.id
-        });
-        throw new BadRequestException('Preserved quantity cannot exceed available stock after update');
       }
       console.log('DEBUG: Updating inventory row', { id: update.id, prevPreserved, preservedQuantity: update.preservedQuantity, newStockQuantity });
       const { error: updError } = await supabase
