@@ -31,10 +31,12 @@ export class RetailProductsController {
     @Query('priceRange') priceRange?: 'under_50' | '50_100' | '100_200' | 'over_200',
     @Query('search') search?: string,
     @Query('filter') filter?: 'all' | 'sale' | 'best-products' | 'recent',
+    @Query('category') category?: string,
+    @Query('subcategory') subcategory?: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number = 1,
     @Query('limit', new DefaultValuePipe(24), ParseIntPipe) limit: number = 24,
   ) {
-    return this.productsService.getPublicProducts(brandId, sortBy, priceRange, search, page, limit, filter);
+    return this.productsService.getPublicProducts(brandId, sortBy, priceRange, search, page, limit, filter, category, subcategory);
   }
 
   @Get('slug/:slug')

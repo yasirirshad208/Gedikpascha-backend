@@ -249,6 +249,8 @@ export class RetailProductsService {
     page: number = 1,
     limit: number = 24,
     filter?: 'all' | 'sale' | 'best-products' | 'recent',
+    category?: string,
+    subcategory?: string,
   ) {
     const supabase = this.supabaseService.getServiceClient();
 
@@ -267,6 +269,56 @@ export class RetailProductsService {
     // Apply brand filter
     if (brandId) {
       query = query.eq('retail_brand_id', brandId);
+    }
+
+    // Apply category filter
+    if (category) {
+      const { data: categoryData } = await supabase
+        .from('categories')
+        .select('id')
+        .eq('slug', category)
+        .eq('is_active', true)
+        .single();
+      
+      if (categoryData) {
+        query = query.eq('category_id', categoryData.id);
+      } else {
+        // If category not found, return empty results
+        return {
+          products: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        };
+      }
+    }
+
+    // Apply subcategory filter
+    if (subcategory) {
+      const { data: subcategoryData } = await supabase
+        .from('subcategories')
+        .select('id')
+        .eq('slug', subcategory)
+        .eq('is_active', true)
+        .single();
+      
+      if (subcategoryData) {
+        query = query.eq('subcategory_id', subcategoryData.id);
+      } else {
+        // If subcategory not found, return empty results
+        return {
+          products: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        };
+      }
     }
 
     // Apply tab filter
@@ -336,11 +388,84 @@ export class RetailProductsService {
     }
 
     // Count total for pagination
-    const { count, error: countError } = await supabase
+    let countQuery = supabase
       .from('retail_products')
       .select('id', { count: 'exact', head: true })
       .eq('status', 'active')
       .is('deleted_at', null);
+
+    // Apply same filters to count query
+    if (brandId) {
+      countQuery = countQuery.eq('retail_brand_id', brandId);
+    }
+
+    if (category) {
+      const { data: categoryData } = await supabase
+        .from('categories')
+        .select('id')
+        .eq('slug', category)
+        .eq('is_active', true)
+        .single();
+      
+      if (categoryData) {
+        countQuery = countQuery.eq('category_id', categoryData.id);
+      }
+    }
+
+    if (subcategory) {
+      const { data: subcategoryData } = await supabase
+        .from('subcategories')
+        .select('id')
+        .eq('slug', subcategory)
+        .eq('is_active', true)
+        .single();
+      
+      if (subcategoryData) {
+        countQuery = countQuery.eq('subcategory_id', subcategoryData.id);
+      }
+    }
+
+    // Apply tab filter to count
+    if (filter) {
+      switch (filter) {
+        case 'sale':
+          countQuery = countQuery.gt('sale_percentage', 0);
+          break;
+        case 'best-products':
+        case 'recent':
+        case 'all':
+        default:
+          break;
+      }
+    }
+
+    // Apply price range to count
+    if (priceRange) {
+      switch (priceRange) {
+        case 'under_50':
+          countQuery = countQuery.lt('retail_price', 50);
+          break;
+        case '50_100':
+          countQuery = countQuery.gte('retail_price', 50).lte('retail_price', 100);
+          break;
+        case '100_200':
+          countQuery = countQuery.gte('retail_price', 100).lte('retail_price', 200);
+          break;
+        case 'over_200':
+          countQuery = countQuery.gt('retail_price', 200);
+          break;
+      }
+    }
+
+    // Apply search to count
+    if (search && search.trim()) {
+      const searchTerm = `%${search.trim()}%`;
+      countQuery = countQuery.or(
+        `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`
+      );
+    }
+
+    const { count, error: countError } = await countQuery;
 
     // Apply pagination
     const from = (page - 1) * limit;
