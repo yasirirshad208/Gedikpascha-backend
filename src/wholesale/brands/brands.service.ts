@@ -461,7 +461,7 @@ export class BrandsService {
     };
   }
 
-  async getBrandProducts(brandId: string, page = 1, limit = 20, filter?: string) {
+  async getBrandProducts(brandId: string, page = 1, limit = 20, filter?: string, search?: string) {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Verify brand exists and is approved
@@ -485,6 +485,14 @@ export class BrandsService {
       .eq('wholesale_brand_id', brandId)
       .eq('status', 'active')
       .is('deleted_at', null);
+
+    // Apply search filter
+    if (search && search.trim()) {
+      const searchTerm = `%${search.trim()}%`;
+      query = query.or(
+        `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`
+      );
+    }
 
     // Apply filters
     switch (filter) {

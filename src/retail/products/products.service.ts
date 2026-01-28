@@ -273,16 +273,14 @@ export class RetailProductsService {
 
     // Apply category filter
     if (category) {
-      const { data: categoryData } = await supabase
+      const { data: categoryData, error: categoryError } = await supabase
         .from('categories')
         .select('id')
         .eq('slug', category)
         .eq('is_active', true)
         .single();
       
-      if (categoryData) {
-        query = query.eq('category_id', categoryData.id);
-      } else {
+      if (categoryError || !categoryData) {
         // If category not found, return empty results
         return {
           products: [],
@@ -294,20 +292,22 @@ export class RetailProductsService {
           },
         };
       }
+      
+      // Try to apply category filter, but don't fail if column doesn't exist
+      // The error will be caught when the query executes
+      query = query.eq('category_id', categoryData.id);
     }
 
     // Apply subcategory filter
     if (subcategory) {
-      const { data: subcategoryData } = await supabase
+      const { data: subcategoryData, error: subcategoryError } = await supabase
         .from('subcategories')
         .select('id')
         .eq('slug', subcategory)
         .eq('is_active', true)
         .single();
       
-      if (subcategoryData) {
-        query = query.eq('subcategory_id', subcategoryData.id);
-      } else {
+      if (subcategoryError || !subcategoryData) {
         // If subcategory not found, return empty results
         return {
           products: [],
@@ -319,6 +319,10 @@ export class RetailProductsService {
           },
         };
       }
+      
+      // Try to apply subcategory filter, but don't fail if column doesn't exist
+      // The error will be caught when the query executes
+      query = query.eq('subcategory_id', subcategoryData.id);
     }
 
     // Apply tab filter
@@ -400,27 +404,31 @@ export class RetailProductsService {
     }
 
     if (category) {
-      const { data: categoryData } = await supabase
+      const { data: categoryData, error: categoryError } = await supabase
         .from('categories')
         .select('id')
         .eq('slug', category)
         .eq('is_active', true)
         .single();
       
-      if (categoryData) {
+      if (!categoryError && categoryData) {
+        // Try to apply category filter, but don't fail if column doesn't exist
+        // The error will be caught when the query executes
         countQuery = countQuery.eq('category_id', categoryData.id);
       }
     }
 
     if (subcategory) {
-      const { data: subcategoryData } = await supabase
+      const { data: subcategoryData, error: subcategoryError } = await supabase
         .from('subcategories')
         .select('id')
         .eq('slug', subcategory)
         .eq('is_active', true)
         .single();
       
-      if (subcategoryData) {
+      if (!subcategoryError && subcategoryData) {
+        // Try to apply subcategory filter, but don't fail if column doesn't exist
+        // The error will be caught when the query executes
         countQuery = countQuery.eq('subcategory_id', subcategoryData.id);
       }
     }
@@ -467,6 +475,139 @@ export class RetailProductsService {
 
     const { count, error: countError } = await countQuery;
 
+    // Check if error is due to missing category_id or subcategory_id column
+    // If so, skip category filtering and return all products
+    if (countError && countError.code === '42703' && 
+        (countError.message?.includes('category_id') || countError.message?.includes('subcategory_id'))) {
+      console.warn('Category filtering not available - category_id/subcategory_id columns do not exist.');
+      console.warn('Please run migration: backend/database/migrations/retail/add_category_fields_to_retail_products.sql');
+      console.warn('Continuing without category filter...');
+      
+      // Rebuild queries without category filters
+      countQuery = supabase
+        .from('retail_products')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'active')
+        .is('deleted_at', null);
+      
+      if (brandId) {
+        countQuery = countQuery.eq('retail_brand_id', brandId);
+      }
+      
+      // Rebuild main query without category filters
+      query = supabase
+        .from('retail_products')
+        .select(`
+          *,
+          retail_brands!inner(id, display_name, logo_url, status),
+          retail_product_images(id, image_url, display_order, is_primary)
+        `)
+        .eq('status', 'active')
+        .eq('retail_brands.status', 'approved')
+        .is('deleted_at', null);
+      
+      if (brandId) {
+        query = query.eq('retail_brand_id', brandId);
+      }
+      
+      // Reapply other filters (filter, priceRange, search, sortBy)
+      if (filter) {
+        switch (filter) {
+          case 'sale':
+            query = query.gt('sale_percentage', 0);
+            countQuery = countQuery.gt('sale_percentage', 0);
+            break;
+        }
+      }
+      
+      if (priceRange) {
+        switch (priceRange) {
+          case 'under_50':
+            query = query.lt('retail_price', 50);
+            countQuery = countQuery.lt('retail_price', 50);
+            break;
+          case '50_100':
+            query = query.gte('retail_price', 50).lte('retail_price', 100);
+            countQuery = countQuery.gte('retail_price', 50).lte('retail_price', 100);
+            break;
+          case '100_200':
+            query = query.gte('retail_price', 100).lte('retail_price', 200);
+            countQuery = countQuery.gte('retail_price', 100).lte('retail_price', 200);
+            break;
+          case 'over_200':
+            query = query.gt('retail_price', 200);
+            countQuery = countQuery.gt('retail_price', 200);
+            break;
+        }
+      }
+      
+      if (search && search.trim()) {
+        const searchTerm = `%${search.trim()}%`;
+        query = query.or(`name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`);
+        countQuery = countQuery.or(`name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`);
+      }
+      
+      // Apply sorting
+      switch (sortBy) {
+        case 'price_asc':
+          query = query.order('retail_price', { ascending: true });
+          break;
+        case 'price_desc':
+          query = query.order('retail_price', { ascending: false });
+          break;
+        case 'newest':
+          query = query.order('created_at', { ascending: false });
+          break;
+        case 'popular':
+          query = query.order('created_at', { ascending: false });
+          break;
+        default:
+          query = query.order('created_at', { ascending: false });
+      }
+      
+      // Re-execute count query
+      const { count: retryCount, error: retryCountError } = await countQuery;
+      if (retryCountError) {
+        console.error('Error counting public retail products:', retryCountError);
+      }
+      
+      // Apply pagination
+      const from = (page - 1) * limit;
+      const to = from + limit - 1;
+      query = query.range(from, to);
+      
+      const { data: products, error: retryError } = await query;
+      
+      if (retryError) {
+        console.error('Error fetching public retail products:', retryError);
+        return {
+          products: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        };
+      }
+      
+      const totalPages = retryCount ? Math.ceil(retryCount / limit) : 0;
+      
+      return {
+        products: products || [],
+        pagination: {
+          page,
+          limit,
+          total: retryCount || 0,
+          totalPages,
+        },
+      };
+    }
+    
+    if (countError) {
+      console.error('Error counting public retail products:', countError);
+    }
+
     // Apply pagination
     const from = (page - 1) * limit;
     const to = from + limit - 1;
@@ -475,6 +616,23 @@ export class RetailProductsService {
     const { data: products, error } = await query;
 
     if (error) {
+      // Check if error is due to missing category_id column
+      if (error.code === '42703' && 
+          (error.message?.includes('category_id') || error.message?.includes('subcategory_id'))) {
+        console.warn('Category filtering not available - category_id/subcategory_id columns do not exist.');
+        console.warn('Please run migration: backend/database/migrations/retail/add_category_fields_to_retail_products.sql');
+        console.warn('Returning empty results for category filter...');
+        
+        return {
+          products: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        };
+      }
       console.error('Error fetching public retail products:', error);
       return {
         products: [],

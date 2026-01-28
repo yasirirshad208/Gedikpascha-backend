@@ -50,6 +50,7 @@ export class ProductVariationDto {
   displayOrder: number;
 }
 
+// Legacy PackVariationDto - kept for backward compatibility
 export class PackVariationDto {
   @IsString()
   variationType: string;
@@ -72,6 +73,66 @@ export class PackVariationDto {
   @IsNumber()
   @Min(0)
   displayOrder: number;
+}
+
+// New Trendyol-style variant (Color × Size × Custom combination)
+export class PackVariantDto {
+  @IsString()
+  color: string;
+
+  @IsOptional()
+  @IsString()
+  colorValue?: string; // hex color code
+
+  @IsString()
+  size: string;
+
+  @IsOptional()
+  @IsObject()
+  customValues?: Record<string, string>; // e.g., { "Material": "Cotton", "Style": "Casual" }
+
+  @IsOptional()
+  @IsString()
+  barcode?: string;
+
+  @IsNumber()
+  @Min(0)
+  stock: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  fixedQuantity?: number; // Fixed quantity for this variant (used when pack has hasFixedQuantities = true)
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  vatRate?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  otvRate?: number;
+
+  @IsOptional()
+  @IsString()
+  stockCode?: string;
+
+  @IsOptional()
+  @IsString()
+  lotInfo?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  imageIndex?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  displayOrder?: number;
 }
 
 export class ProductPackSizeDto {
@@ -104,6 +165,14 @@ export class ProductPackSizeDto {
   @Min(0)
   displayOrder: number;
 
+  // New Trendyol-style variants (Color × Size combinations)
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PackVariantDto)
+  variants?: PackVariantDto[];
+
+  // Legacy fields - kept for backward compatibility
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })

@@ -142,6 +142,96 @@ export class ProductsController {
     }));
   }
 
+  @Get('subcategories')
+  async getSubcategories(
+    @Query('categoryId') categoryId?: string,
+  ) {
+    // Public endpoint - no auth required
+    const serviceClient = this.supabaseService.getServiceClient();
+    
+    let query = serviceClient
+      .from('subcategories')
+      .select('id, name, slug, category_id')
+      .eq('is_active', true)
+      .order('display_order', { ascending: true })
+      .order('name', { ascending: true });
+
+    if (categoryId && categoryId !== 'all') {
+      query = query.eq('category_id', categoryId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw new BadRequestException(`Failed to fetch subcategories: ${error.message || 'Unknown error'}`);
+    }
+
+    return (data || []).map((sub: any) => ({
+      id: sub.id,
+      name: sub.name,
+      slug: sub.slug,
+      categoryId: sub.category_id,
+    }));
+  }
+
+  @Get('category-filters')
+  async getCategoryFilters(
+    @Query('categoryId') categoryId?: string,
+  ) {
+    // Public endpoint - no auth required
+    // Returns filter configuration for a specific category
+    const serviceClient = this.supabaseService.getServiceClient();
+    
+    if (!categoryId || categoryId === 'all') {
+      return [];
+    }
+
+    const { data, error } = await serviceClient
+      .from('category_filter_config')
+      .select('*')
+      .eq('category_id', categoryId)
+      .eq('is_active', true)
+      .order('display_order', { ascending: true });
+
+    if (error) {
+      console.error('Error fetching category filters:', error);
+      return [];
+    }
+
+    return (data || []).map((filter: any) => ({
+      key: filter.filter_key,
+      label: filter.filter_label,
+      type: filter.filter_type,
+      dataSource: filter.data_source,
+      dataPath: filter.data_path,
+      options: filter.options,
+      isRequired: filter.is_required,
+    }));
+  }
+
+  @Get('brands')
+  async getBrands() {
+    // Public endpoint - returns all approved brands for filtering
+    const serviceClient = this.supabaseService.getServiceClient();
+    
+    const { data, error } = await serviceClient
+      .from('wholesale_brands')
+      .select('id, brand_name, display_name, logo_url')
+      .eq('status', 'approved')
+      .order('display_name', { ascending: true });
+
+    if (error) {
+      throw new BadRequestException(`Failed to fetch brands: ${error.message || 'Unknown error'}`);
+    }
+
+    return (data || []).map((brand: any) => ({
+      id: brand.id,
+      name: brand.display_name || brand.brand_name,
+      slug: brand.brand_name,
+      logoUrl: brand.logo_url,
+    }));
+  }
+
   @Get('slug/:slug')
   async getProductBySlug(
     @Param('slug') slug: string,
@@ -171,26 +261,76 @@ export class ProductsController {
     @Query('limit', new DefaultValuePipe(24), ParseIntPipe) limit: number = 24,
     @Query('search') search?: string,
     @Query('categoryId') categoryId?: string,
+    @Query('subcategoryId') subcategoryId?: string,
     @Query('sortBy') sortBy?: string,
     @Query('filter') filter?: string,
     @Query('priceMin') priceMin?: string,
     @Query('priceMax') priceMax?: string,
     @Query('minOrder') minOrder?: string,
+    @Query('brandIds') brandIds?: string,
+    @Query('rating') rating?: string,
+    @Query('inStock') inStock?: string,
+    @Query('freeShipping') freeShipping?: string,
+    @Query('colors') colors?: string,
+    @Query('sizes') sizes?: string,
+    @Query('materials') materials?: string,
+    @Query('gender') gender?: string,
+    @Query('productType') productType?: string,
+    @Query('style') style?: string,
+    @Query('features') features?: string,
+    // Dynamic filters - can be any category-specific filter
+    @Query('filters') dynamicFilters?: string,
   ) {
     const priceMinNum = priceMin ? parseFloat(priceMin) : undefined;
     const priceMaxNum = priceMax ? parseFloat(priceMax) : undefined;
     const minOrderNum = minOrder ? parseInt(minOrder, 10) : undefined;
+    const ratingNum = rating ? parseFloat(rating) : undefined;
+    const inStockBool = inStock === 'true' ? true : inStock === 'false' ? false : undefined;
+    const freeShippingBool = freeShipping === 'true' ? true : undefined;
+    
+    // Parse comma-separated arrays
+    const brandIdArray = brandIds ? brandIds.split(',').filter(Boolean) : undefined;
+    const colorArray = colors ? colors.split(',').filter(Boolean) : undefined;
+    const sizeArray = sizes ? sizes.split(',').filter(Boolean) : undefined;
+    const materialArray = materials ? materials.split(',').filter(Boolean) : undefined;
+    const genderArray = gender ? gender.split(',').filter(Boolean) : undefined;
+    const productTypeArray = productType ? productType.split(',').filter(Boolean) : undefined;
+    const styleArray = style ? style.split(',').filter(Boolean) : undefined;
+    const featuresArray = features ? features.split(',').filter(Boolean) : undefined;
+    
+    // Parse dynamic filters JSON
+    let parsedDynamicFilters: Record<string, string[]> | undefined;
+    if (dynamicFilters) {
+      try {
+        parsedDynamicFilters = JSON.parse(dynamicFilters);
+      } catch (e) {
+        console.error('Failed to parse dynamic filters:', e);
+      }
+    }
     
     return this.productsService.getAllProducts(
       page, 
       limit, 
       search, 
       categoryId, 
+      subcategoryId,
       sortBy, 
       filter,
       priceMinNum,
       priceMaxNum,
       minOrderNum,
+      brandIdArray,
+      ratingNum,
+      inStockBool,
+      freeShippingBool,
+      colorArray,
+      sizeArray,
+      materialArray,
+      genderArray,
+      productTypeArray,
+      styleArray,
+      featuresArray,
+      parsedDynamicFilters,
     );
   }
 
