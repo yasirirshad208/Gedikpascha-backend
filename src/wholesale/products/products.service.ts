@@ -506,8 +506,25 @@ export class ProductsService {
       })) : [];
 
       // Extract unique colors and sizes from variants for UI state
-      const colors = isNewVariantFormat ? 
-        [...new Map(packVars.map(v => [v.color, { id: v.id, name: v.color, value: v.color_value || '#000000' }])).values()] : [];
+      const colors = isNewVariantFormat ? (() => {
+        const colorMap = new Map<string, { id: string; name: string; value: string; imageIndex: number | null }>();
+        packVars.forEach(v => {
+          if (!v.color) return;
+          const existing = colorMap.get(v.color);
+          const imgIndex = v.image_index ?? null;
+          if (!existing) {
+            colorMap.set(v.color, {
+              id: v.id,
+              name: v.color,
+              value: v.color_value || '#000000',
+              imageIndex: imgIndex,
+            });
+          } else if ((existing.imageIndex === null || existing.imageIndex === undefined) && imgIndex !== null) {
+            colorMap.set(v.color, { ...existing, imageIndex: imgIndex });
+          }
+        });
+        return [...colorMap.values()];
+      })() : [];
       const sizes = isNewVariantFormat ? 
         [...new Set(packVars.map(v => v.size))] : [];
 
