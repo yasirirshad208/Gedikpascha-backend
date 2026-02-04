@@ -137,6 +137,23 @@ export class ProductsService {
       }
     }
 
+    // Derive initial stock quantity: if pack variants are provided, trust their stock;
+    // otherwise fall back to the DTO's product-level stockQuantity.
+    let derivedStockQuantity = createProductDto.stockQuantity;
+    if (createProductDto.packSizes && createProductDto.packSizes.length > 0) {
+      let totalStock = 0;
+      createProductDto.packSizes.forEach(pack => {
+        if (pack.variants && pack.variants.length > 0) {
+          pack.variants.forEach(variant => {
+            totalStock += variant.stock || 0;
+          });
+        }
+      });
+      if (totalStock > 0) {
+        derivedStockQuantity = totalStock;
+      }
+    }
+
     // Prepare product data for insertion
     const productData: any = {
       wholesale_brand_id: brand.id,
@@ -155,7 +172,7 @@ export class ProductsService {
       model_code: createProductDto.modelCode || null,
       min_order_quantity: createProductDto.minOrderQuantity,
       min_order_amount: createProductDto.minOrderAmount || null,
-      stock_quantity: createProductDto.stockQuantity,
+      stock_quantity: derivedStockQuantity,
       track_inventory: createProductDto.trackInventory,
       low_stock_threshold: createProductDto.lowStockThreshold || null,
       status: createProductDto.status || 'draft',
@@ -279,7 +296,10 @@ export class ProductsService {
             otv_rate: variant.otvRate || null,
             stock_code: variant.stockCode || null,
             lot_info: variant.lotInfo || null,
-            image_index: variant.imageIndex !== undefined ? variant.imageIndex : null,
+            image_index: variant.imageIndices?.[0] ?? (variant.imageIndex !== undefined ? variant.imageIndex : null),
+            image_indices: (variant.imageIndices && variant.imageIndices.length > 0)
+              ? variant.imageIndices
+              : (variant.imageIndex !== undefined ? [variant.imageIndex] : null),
             display_order: variant.displayOrder !== undefined ? variant.displayOrder : vIndex,
             // Legacy fields for compatibility
             variation_type: 'color_size',
@@ -303,7 +323,10 @@ export class ProductsService {
             variation_type: variation.variationType,
             name: variation.name,
             value: variation.value || null,
-            image_index: variation.imageIndex !== undefined ? variation.imageIndex : null,
+            image_index: variation.imageIndices?.[0] ?? (variation.imageIndex !== undefined ? variation.imageIndex : null),
+            image_indices: (variation.imageIndices && variation.imageIndices.length > 0)
+              ? variation.imageIndices
+              : (variation.imageIndex !== undefined ? [variation.imageIndex] : null),
             is_available: variation.isAvailable,
             display_order: variation.displayOrder !== undefined ? variation.displayOrder : vIndex,
           }));
@@ -501,26 +524,29 @@ export class ProductsService {
         otvRate: v.otv_rate?.toString() || '',
         stockCode: v.stock_code || '',
         lotInfo: v.lot_info || '',
-        imageIndex: v.image_index,
+        imageIndex: (v.image_indices && v.image_indices.length > 0) ? v.image_indices[0] : v.image_index,
+        imageIndices: (v.image_indices && v.image_indices.length > 0) ? v.image_indices : (v.image_index != null ? [v.image_index] : []),
         displayOrder: v.display_order,
       })) : [];
 
       // Extract unique colors and sizes from variants for UI state
       const colors = isNewVariantFormat ? (() => {
-        const colorMap = new Map<string, { id: string; name: string; value: string; imageIndex: number | null }>();
+        const colorMap = new Map<string, { id: string; name: string; value: string; imageIndex: number | null; imageIndices: number[] }>();
         packVars.forEach(v => {
           if (!v.color) return;
           const existing = colorMap.get(v.color);
-          const imgIndex = v.image_index ?? null;
+          const imgIndices = (v.image_indices && v.image_indices.length > 0) ? v.image_indices : (v.image_index != null ? [v.image_index] : []);
+          const imgIndex = imgIndices.length > 0 ? imgIndices[0] : null;
           if (!existing) {
             colorMap.set(v.color, {
               id: v.id,
               name: v.color,
               value: v.color_value || '#000000',
               imageIndex: imgIndex,
+              imageIndices: imgIndices,
             });
-          } else if ((existing.imageIndex === null || existing.imageIndex === undefined) && imgIndex !== null) {
-            colorMap.set(v.color, { ...existing, imageIndex: imgIndex });
+          } else if (existing.imageIndices.length === 0 && imgIndices.length > 0) {
+            colorMap.set(v.color, { ...existing, imageIndex: imgIndex, imageIndices: imgIndices });
           }
         });
         return [...colorMap.values()];
@@ -796,11 +822,47 @@ export class ProductsService {
       }
       updateData.subcategory_id = updateProductDto.subcategoryId || null;
     }
-    if (updateProductDto.wholesalePrice !== undefined) updateData.wholesale_price = updateProductDto.wholesalePrice;
-    if (updateProductDto.salePercentage !== undefined) updateData.sale_percentage = updateProductDto.salePercentage || 0;
-    if (updateProductDto.minOrderQuantity !== undefined) updateData.min_order_quantity = updateProductDto.minOrderQuantity;
-    if (updateProductDto.minOrderAmount !== undefined) updateData.min_order_amount = updateProductDto.minOrderAmount || null;
-    if (updateProductDto.stockQuantity !== undefined) updateData.stock_quantity = updateProductDto.stockQuantity;
+    if (updateProductDto.wholesalePrice !== undefined) {
+      updateData.wholesale_price = updateProductDto.wholesalePrice;
+    }
+    if (updateProductDto.salePercentage !== undefined) {
+      updateData.sale_percentage = updateProductDto.salePercentage || 0;
+    }
+    // Map additional pricing fields that were previously ignored
+    if (updateProductDto.retailPrice !== undefined) {
+      updateData.retail_price = updateProductDto.retailPrice;
+    }
+    if (updateProductDto.barcode !== undefined) {
+      updateData.barcode = updateProductDto.barcode || null;
+    }
+    if (updateProductDto.vatRate !== undefined) {
+      updateData.vat_rate = updateProductDto.vatRate || null;
+    }
+    if (updateProductDto.modelCode !== undefined) {
+      updateData.model_code = updateProductDto.modelCode || null;
+    }
+    if (updateProductDto.minOrderQuantity !== undefined) {
+      updateData.min_order_quantity = updateProductDto.minOrderQuantity;
+    }
+    if (updateProductDto.minOrderAmount !== undefined) {
+      updateData.min_order_amount = updateProductDto.minOrderAmount || null;
+    }
+
+    // If packSizes with variants are provided in the update, recompute stock from variants;
+    // otherwise, fall back to the DTO's stockQuantity field.
+    if (updateProductDto.packSizes && updateProductDto.packSizes.length > 0) {
+      let totalStock = 0;
+      updateProductDto.packSizes.forEach(pack => {
+        if (pack.variants && pack.variants.length > 0) {
+          pack.variants.forEach(variant => {
+            totalStock += variant.stock || 0;
+          });
+        }
+      });
+      updateData.stock_quantity = totalStock;
+    } else if (updateProductDto.stockQuantity !== undefined) {
+      updateData.stock_quantity = updateProductDto.stockQuantity;
+    }
     if (updateProductDto.trackInventory !== undefined) updateData.track_inventory = updateProductDto.trackInventory;
     if (updateProductDto.lowStockThreshold !== undefined) updateData.low_stock_threshold = updateProductDto.lowStockThreshold || null;
     if (updateProductDto.status !== undefined) updateData.status = updateProductDto.status;
@@ -971,7 +1033,10 @@ export class ProductsService {
               otv_rate: variant.otvRate || null,
               stock_code: variant.stockCode || null,
               lot_info: variant.lotInfo || null,
-              image_index: variant.imageIndex !== undefined ? variant.imageIndex : null,
+              image_index: variant.imageIndices?.[0] ?? (variant.imageIndex !== undefined ? variant.imageIndex : null),
+              image_indices: (variant.imageIndices && variant.imageIndices.length > 0)
+                ? variant.imageIndices
+                : (variant.imageIndex !== undefined ? [variant.imageIndex] : null),
               display_order: variant.displayOrder !== undefined ? variant.displayOrder : vIndex,
               // Legacy fields for compatibility
               variation_type: 'color_size',

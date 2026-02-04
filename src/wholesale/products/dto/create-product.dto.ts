@@ -67,6 +67,12 @@ export class PackVariationDto {
   @Min(0)
   imageIndex?: number;
 
+  @IsOptional()
+  @IsArray()
+  @IsNumber({}, { each: true })
+  @Min(0, { each: true })
+  imageIndices?: number[];
+
   @IsBoolean()
   isAvailable: boolean;
 
@@ -128,6 +134,12 @@ export class PackVariantDto {
   @IsNumber()
   @Min(0)
   imageIndex?: number;
+
+  @IsOptional()
+  @IsArray()
+  @IsNumber({}, { each: true })
+  @Min(0, { each: true })
+  imageIndices?: number[];
 
   @IsOptional()
   @IsNumber()
