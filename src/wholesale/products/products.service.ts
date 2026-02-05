@@ -850,19 +850,30 @@ export class ProductsService {
 
     // If packSizes with variants are provided in the update, recompute stock from variants;
     // otherwise, fall back to the DTO's stockQuantity field.
+    console.log('[UpdateProduct] stockQuantity from DTO:', updateProductDto.stockQuantity);
+    console.log('[UpdateProduct] packSizes count:', updateProductDto.packSizes?.length);
     if (updateProductDto.packSizes && updateProductDto.packSizes.length > 0) {
-      let totalStock = 0;
-      updateProductDto.packSizes.forEach(pack => {
-        if (pack.variants && pack.variants.length > 0) {
-          pack.variants.forEach(variant => {
-            totalStock += variant.stock || 0;
-          });
-        }
-      });
-      updateData.stock_quantity = totalStock;
+      const hasVariants = updateProductDto.packSizes.some(
+        pack => pack.variants && pack.variants.length > 0
+      );
+      console.log('[UpdateProduct] hasVariants:', hasVariants);
+      if (hasVariants) {
+        let totalStock = 0;
+        updateProductDto.packSizes.forEach(pack => {
+          if (pack.variants && pack.variants.length > 0) {
+            pack.variants.forEach(variant => {
+              totalStock += variant.stock || 0;
+            });
+          }
+        });
+        updateData.stock_quantity = totalStock;
+      } else if (updateProductDto.stockQuantity !== undefined) {
+        updateData.stock_quantity = updateProductDto.stockQuantity;
+      }
     } else if (updateProductDto.stockQuantity !== undefined) {
       updateData.stock_quantity = updateProductDto.stockQuantity;
     }
+    console.log('[UpdateProduct] Final updateData.stock_quantity:', updateData.stock_quantity);
     if (updateProductDto.trackInventory !== undefined) updateData.track_inventory = updateProductDto.trackInventory;
     if (updateProductDto.lowStockThreshold !== undefined) updateData.low_stock_threshold = updateProductDto.lowStockThreshold || null;
     if (updateProductDto.status !== undefined) updateData.status = updateProductDto.status;
@@ -1268,6 +1279,7 @@ export class ProductsService {
     limit: number = 24,
     search?: string,
     categoryId?: string,
+    categorySlug?: string,
     subcategoryId?: string,
     sortBy?: string,
     filter?: string,
@@ -1290,86 +1302,140 @@ export class ProductsService {
     const serviceClient = this.supabaseService.getServiceClient();
     const offset = (page - 1) * limit;
 
-    // First, get product IDs that match pack variant filters (colors, sizes)
-    let filteredProductIds: string[] | null = null;
+    const resolveCategoryId = async (): Promise<string | undefined | null> => {
+      if (!categorySlug || categorySlug === 'all') {
+        return categoryId;
+      }
 
-    // Filter by colors from pack variants
-    if (colors && colors.length > 0) {
+      try {
+        const { data: category, error } = await serviceClient
+          .from('categories')
+          .select('id')
+          .eq('slug', categorySlug)
+          .maybeSingle();
+
+        if (!error && category) {
+          return category.id;
+        }
+
+        return null;
+      } catch (e) {
+        console.error('Failed to resolve category slug:', e);
+        return null;
+      }
+    };
+
+    const getProductIdsByColor = async (): Promise<string[] | null> => {
+      if (!colors || colors.length === 0) {
+        return null;
+      }
+
       const { data: packVariants } = await serviceClient
         .from('wholesale_pack_variations')
         .select('pack_size_id')
         .in('color', colors);
-      
-      if (packVariants && packVariants.length > 0) {
-        const packSizeIds = [...new Set(packVariants.map(v => v.pack_size_id))];
-        
-        const { data: packSizes } = await serviceClient
-          .from('wholesale_product_pack_sizes')
-          .select('product_id')
-          .in('id', packSizeIds);
-        
-        if (packSizes) {
-          const productIdsByColor = [...new Set(packSizes.map(p => p.product_id))];
-          if (filteredProductIds !== null) {
-            const currentFilteredIds = filteredProductIds as string[];
-            filteredProductIds = currentFilteredIds.filter(id => productIdsByColor.includes(id));
-          } else {
-            filteredProductIds = productIdsByColor;
-          }
-        }
-      } else {
-        // No products match the color filter
-        filteredProductIds = [];
-      }
-    }
 
-    // Filter by sizes from pack variants
-    if (sizes && sizes.length > 0 && (filteredProductIds === null || filteredProductIds.length > 0)) {
+      if (!packVariants || packVariants.length === 0) {
+        return [];
+      }
+
+      const packSizeIds = [...new Set(packVariants.map(v => v.pack_size_id))];
+      const { data: packSizes } = await serviceClient
+        .from('wholesale_product_pack_sizes')
+        .select('product_id')
+        .in('id', packSizeIds);
+
+      return packSizes ? [...new Set(packSizes.map(p => p.product_id))] : [];
+    };
+
+    const getProductIdsBySize = async (): Promise<string[] | null> => {
+      if (!sizes || sizes.length === 0) {
+        return null;
+      }
+
       const { data: packVariants } = await serviceClient
         .from('wholesale_pack_variations')
         .select('pack_size_id')
         .in('size', sizes);
-      
-      if (packVariants && packVariants.length > 0) {
-        const packSizeIds = [...new Set(packVariants.map(v => v.pack_size_id))];
-        
-        const { data: packSizes } = await serviceClient
-          .from('wholesale_product_pack_sizes')
-          .select('product_id')
-          .in('id', packSizeIds);
-        
-        if (packSizes) {
-          const productIdsBySize = [...new Set(packSizes.map(p => p.product_id))];
-          if (filteredProductIds !== null) {
-            const currentFilteredIds = filteredProductIds as string[];
-            filteredProductIds = currentFilteredIds.filter(id => productIdsBySize.includes(id));
-          } else {
-            filteredProductIds = productIdsBySize;
-          }
-        }
-      } else {
-        filteredProductIds = [];
-      }
-    }
 
-    // Filter by materials from variations
-    if (materials && materials.length > 0 && (filteredProductIds === null || filteredProductIds.length > 0)) {
+      if (!packVariants || packVariants.length === 0) {
+        return [];
+      }
+
+      const packSizeIds = [...new Set(packVariants.map(v => v.pack_size_id))];
+      const { data: packSizes } = await serviceClient
+        .from('wholesale_product_pack_sizes')
+        .select('product_id')
+        .in('id', packSizeIds);
+
+      return packSizes ? [...new Set(packSizes.map(p => p.product_id))] : [];
+    };
+
+    const getProductIdsByMaterial = async (): Promise<string[] | null> => {
+      if (!materials || materials.length === 0) {
+        return null;
+      }
+
       const { data: variations } = await serviceClient
         .from('wholesale_product_variations')
         .select('product_id')
         .eq('variation_type', 'material')
         .in('name', materials);
-      
-      if (variations && variations.length > 0) {
-        const productIdsByMaterial = [...new Set(variations.map(v => v.product_id))];
-        if (filteredProductIds !== null) {
-          const currentFilteredIds = filteredProductIds as string[];
-          filteredProductIds = currentFilteredIds.filter(id => productIdsByMaterial.includes(id));
-        } else {
-          filteredProductIds = productIdsByMaterial;
-        }
-      } else {
+
+      return variations ? [...new Set(variations.map(v => v.product_id))] : [];
+    };
+
+    // Resolve category and filter product IDs in parallel
+    const [resolvedCategoryId, colorProductIds, sizeProductIds, materialProductIds] = await Promise.all([
+      resolveCategoryId(),
+      getProductIdsByColor(),
+      getProductIdsBySize(),
+      getProductIdsByMaterial(),
+    ]);
+
+    if (resolvedCategoryId === null) {
+      return {
+        products: [],
+        pagination: {
+          page,
+          limit,
+          total: 0,
+          totalPages: 0,
+        },
+      };
+    }
+
+    // First, get product IDs that match pack variant filters (colors, sizes, materials)
+    let filteredProductIds: string[] | null = null;
+    
+    // Apply color filter
+    if (colorProductIds !== null) {
+      if (colorProductIds.length === 0) {
         filteredProductIds = [];
+      } else {
+        filteredProductIds = colorProductIds;
+      }
+    }
+    
+    // Apply size filter
+    if (sizeProductIds !== null) {
+      if (sizeProductIds.length === 0) {
+        filteredProductIds = [];
+      } else if (filteredProductIds === null) {
+        filteredProductIds = sizeProductIds;
+      } else if (filteredProductIds.length > 0) {
+        filteredProductIds = filteredProductIds.filter(id => sizeProductIds.includes(id));
+      }
+    }
+    
+    // Apply material filter
+    if (materialProductIds !== null) {
+      if (materialProductIds.length === 0) {
+        filteredProductIds = [];
+      } else if (filteredProductIds === null) {
+        filteredProductIds = materialProductIds;
+      } else if (filteredProductIds.length > 0) {
+        filteredProductIds = filteredProductIds.filter(id => materialProductIds.includes(id));
       }
     }
 
@@ -1385,7 +1451,7 @@ export class ProductsService {
 
     // Apply product ID filter from pack variant/variation filters
     if (filteredProductIds !== null) {
-      if (filteredProductIds.length === 0) {
+      if (Array.isArray(filteredProductIds) && filteredProductIds.length === 0) {
         // No products match, return empty result
         return {
           products: [],
@@ -1422,9 +1488,9 @@ export class ProductsService {
     }
 
     // Apply category filter
-    if (categoryId && categoryId !== 'all') {
-      countQuery = countQuery.eq('category_id', categoryId);
-      productsQuery = productsQuery.eq('category_id', categoryId);
+      if (resolvedCategoryId && resolvedCategoryId !== 'all') {
+        countQuery = countQuery.eq('category_id', resolvedCategoryId);
+        productsQuery = productsQuery.eq('category_id', resolvedCategoryId);
     }
 
     // Apply subcategory filter
@@ -1560,18 +1626,18 @@ export class ProductsService {
     }
 
     // Get products count
-    const { count, error: countError } = await countQuery;
+    // Get products count and products in parallel
+    const [{ count, error: countError }, { data: products, error: productsError }] = await Promise.all([
+      countQuery,
+      productsQuery.range(offset, offset + limit - 1),
+    ]);
 
     if (countError) {
       throw new BadRequestException(
         `Failed to fetch products count: ${countError.message || 'Unknown error'}`,
       );
     }
-
-    // Get products with pagination
-    const { data: products, error: productsError } = await productsQuery
-      .range(offset, offset + limit - 1);
-
+    
     if (productsError) {
       throw new BadRequestException(
         `Failed to fetch products: ${productsError.message || 'Unknown error'}`,
