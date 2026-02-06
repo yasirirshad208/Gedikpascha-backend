@@ -75,6 +75,8 @@ BEGIN
           sku,
           description,
           short_description,
+                    category_id,
+                    subcategory_id,
           cost_price,
           retail_price,
           stock_quantity,
@@ -91,6 +93,8 @@ BEGIN
           'RTL-' || substring(md5(random()::text) from 1 for 8), -- Generate unique SKU
           v_wholesale_product.description,
           v_wholesale_product.short_description,
+                    v_wholesale_product.category_id,
+                    v_wholesale_product.subcategory_id,
           v_unit_price, -- cost_price (what they paid)
           NULL, -- retail_price (user must set)
           v_total_quantity,

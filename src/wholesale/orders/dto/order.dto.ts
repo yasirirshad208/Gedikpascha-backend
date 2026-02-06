@@ -186,6 +186,11 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   paymentMethod?: string;
+
+  // Retail intent flag
+  @IsOptional()
+  @IsBoolean()
+  sellAsRetailer?: boolean;
 }
 
 export class UpdateOrderStatusDto {

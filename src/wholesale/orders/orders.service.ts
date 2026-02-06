@@ -91,6 +91,7 @@ export class OrdersService {
       payment_status: 'pending',
       payment_method: createOrderDto.paymentMethod || 'cash_on_delivery',
       notes: createOrderDto.notes || null,
+      sell_as_retailer: createOrderDto.sellAsRetailer || false,
     };
 
     // Add billing address if different from shipping
