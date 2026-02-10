@@ -157,7 +157,7 @@ export class RetailProductsController {
   async updateProductInventoryPreserved(
     @Param('id') productId: string,
     @Headers('authorization') authHeader: string,
-    @Body() updates: { updates: { id: string; preservedQuantity: number }[] },
+    @Body() body: { updates: { combinationKey: string; preservedQuantity: number }[] },
   ) {
     const token = authHeader?.replace('Bearer ', '');
     if (!token) throw new UnauthorizedException('Authentication required');
@@ -167,7 +167,7 @@ export class RetailProductsController {
     return this.productsService.updateInventoryPreservedQuantities(
       productId,
       userData.user.id,
-      updates.updates,
+      body.updates,
     );
   }
 }

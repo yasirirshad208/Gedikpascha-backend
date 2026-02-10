@@ -748,6 +748,23 @@ export class RetailProductsService {
 
     const product = products[0];
 
+    // Aggregate inventory by combination_key (multiple rows may exist per key)
+    const rawInventory = product.retail_product_inventory || [];
+    const inventoryMap = new Map<string, { id: string; combination_key: string; stock_quantity: number }>();
+    for (const row of rawInventory) {
+      const existing = inventoryMap.get(row.combination_key);
+      if (existing) {
+        existing.stock_quantity += row.stock_quantity;
+      } else {
+        inventoryMap.set(row.combination_key, {
+          id: row.id,
+          combination_key: row.combination_key,
+          stock_quantity: row.stock_quantity,
+        });
+      }
+    }
+    product.retail_product_inventory = Array.from(inventoryMap.values());
+
     // Get related products (same brand)
     const { data: relatedProducts } = await supabase
       .from('retail_products')
@@ -775,7 +792,8 @@ export class RetailProductsService {
     };
   }
 
-  // Get all inventory rows for a product (with preserved quantity)
+  // Get all inventory rows for a product, aggregated by combination_key
+  // Auto-splits "default" inventory into per-variation rows when variations exist
   async getProductInventory(productId: string, userId: string) {
     const supabase = this.supabaseService.getServiceClient();
     // Get user's retail brand
@@ -795,22 +813,157 @@ export class RetailProductsService {
       .is('deleted_at', null)
       .single();
     if (prodError || !product) throw new NotFoundException('Product not found');
-    // Get inventory rows
+    // Get all inventory rows
     const { data: inventory, error: invError } = await supabase
       .from('retail_product_inventory')
       .select('*')
       .eq('product_id', productId);
     if (invError) throw new BadRequestException('Failed to fetch inventory');
-    return inventory || [];
+
+    const rows = inventory || [];
+
+    // Check if we need to auto-split: inventory is only "default" but product has variations
+    const allDefault = rows.length > 0 && rows.every(r => r.combination_key === 'default');
+    if (allDefault) {
+      // Fetch the product's variations
+      const { data: variations } = await supabase
+        .from('retail_product_variations')
+        .select('variation_type, name')
+        .eq('product_id', productId)
+        .order('display_order', { ascending: true });
+
+      if (variations && variations.length > 0) {
+        // Build combination keys from variations
+        const combinationKeys = this.buildCombinationKeysFromVariations(variations);
+
+        if (combinationKeys.length > 0) {
+          // Calculate total stock from all default rows
+          const totalStock = rows.reduce((sum, r) => sum + r.stock_quantity + r.preserved_quantity, 0);
+          const stockPerCombination = Math.floor(totalStock / combinationKeys.length);
+          const remainder = totalStock % combinationKeys.length;
+
+          // Pick one default row to get source_wholesale_order_item_id
+          const sourceId = rows[0].source_wholesale_order_item_id;
+
+          // Delete all "default" rows
+          await supabase
+            .from('retail_product_inventory')
+            .delete()
+            .eq('product_id', productId)
+            .eq('combination_key', 'default');
+
+          // Insert new rows per combination
+          const newRows: any[] = [];
+          for (let i = 0; i < combinationKeys.length; i++) {
+            const qty = stockPerCombination + (i < remainder ? 1 : 0);
+            const { data: inserted } = await supabase
+              .from('retail_product_inventory')
+              .insert({
+                product_id: productId,
+                combination_key: combinationKeys[i],
+                stock_quantity: qty,
+                preserved_quantity: 0,
+                source_wholesale_order_item_id: sourceId,
+              })
+              .select('*')
+              .single();
+            if (inserted) {
+              newRows.push(inserted);
+            }
+          }
+
+          // Return the newly created rows
+          return newRows.map(r => ({
+            combination_key: r.combination_key,
+            stock_quantity: r.stock_quantity,
+            preserved_quantity: r.preserved_quantity,
+            row_count: 1,
+          }));
+        }
+      }
+    }
+    
+    // Aggregate by combination_key (multiple rows can exist per key due to different order sources)
+    const aggregated = new Map<string, { combination_key: string; stock_quantity: number; preserved_quantity: number; row_count: number }>();
+    for (const row of rows) {
+      const key = row.combination_key;
+      const existing = aggregated.get(key);
+      if (existing) {
+        existing.stock_quantity += row.stock_quantity;
+        existing.preserved_quantity += row.preserved_quantity;
+        existing.row_count += 1;
+      } else {
+        aggregated.set(key, {
+          combination_key: key,
+          stock_quantity: row.stock_quantity,
+          preserved_quantity: row.preserved_quantity,
+          row_count: 1,
+        });
+      }
+    }
+    
+    return Array.from(aggregated.values());
   }
 
-  // Update preserved_quantity for inventory rows
+  // Build all combination keys from a product's variations
+  private buildCombinationKeysFromVariations(
+    variations: { variation_type: string; name: string }[]
+  ): string[] {
+    // Group by variation_type
+    const byType = new Map<string, string[]>();
+    for (const v of variations) {
+      const existing = byType.get(v.variation_type) || [];
+      existing.push(v.name);
+      byType.set(v.variation_type, existing);
+    }
+
+    const types = Array.from(byType.keys()).sort((a, b) => a.localeCompare(b, 'en'));
+
+    // Check for combined types (e.g. "color_size")
+    // If a type contains "_" and includes "color", each variation name is already a combination
+    const hasCombinedType = types.some(t => t.includes('_'));
+    if (hasCombinedType && types.length === 1) {
+      // Single combined type - each variation name IS a combination
+      const type = types[0];
+      const names = byType.get(type) || [];
+      return names.map(name => `${type}:${name}`);
+    }
+
+    // Multiple separate types - create cross-product
+    // e.g. color: [Black, White], size: [S, M, L] => color:Black|size:S, color:Black|size:M, ...
+    const groups = types.map(type => ({
+      type,
+      names: byType.get(type) || [],
+    }));
+
+    // Cross-product helper
+    const crossProduct = (groups: { type: string; names: string[] }[]): string[] => {
+      if (groups.length === 0) return [];
+      if (groups.length === 1) {
+        return groups[0].names.map(name => `${groups[0].type}:${name}`);
+      }
+
+      const [first, ...rest] = groups;
+      const restCombinations = crossProduct(rest);
+      const result: string[] = [];
+      for (const name of first.names) {
+        const prefix = `${first.type}:${name}`;
+        for (const suffix of restCombinations) {
+          result.push(`${prefix}|${suffix}`);
+        }
+      }
+      return result;
+    };
+
+    return crossProduct(groups);
+  }
+
+  // Update preserved_quantity for inventory rows (by combination_key)
   async updateInventoryPreservedQuantities(
     productId: string,
     userId: string,
-    updates: { id: string; preservedQuantity: number }[]
+    updates: { combinationKey: string; preservedQuantity: number }[]
   ) {
-    console.log('DEBUG: updateInventoryPreservedQuantities called', { productId, userId, updates });
     const supabase = this.supabaseService.getServiceClient();
     // Get user's retail brand
     const { data: retailBrand, error: brandError } = await supabase
@@ -820,7 +973,6 @@ export class RetailProductsService {
       .eq('status', 'approved')
       .single();
     if (brandError || !retailBrand) {
-      console.error('DEBUG: Retail brand not found', brandError);
       throw new NotFoundException('Retail brand not found');
     }
     // Check product ownership
@@ -832,57 +984,54 @@ export class RetailProductsService {
       .is('deleted_at', null)
       .single();
     if (prodError || !product) {
-      console.error('DEBUG: Product not found', prodError);
       throw new NotFoundException('Product not found');
     }
-    // Validate and update each inventory row
+
     for (const update of updates) {
-      // Get current row
-      const { data: row, error: rowError } = await supabase
-        .from('retail_product_inventory')
-        .select('stock_quantity, preserved_quantity')
-        .eq('id', update.id)
-        .eq('product_id', productId)
-        .single();
-      if (rowError || !row) {
-        console.error('DEBUG: Inventory row not found', rowError);
-        throw new NotFoundException('Inventory row not found');
-      }
-      const prevPreserved = row.preserved_quantity;
-      const stockQuantity = row.stock_quantity;
-      const diff = update.preservedQuantity - prevPreserved;
-      let newStockQuantity = stockQuantity;
-      if (diff > 0) {
-        // Increase in preserved, subtract from stock
-        newStockQuantity = stockQuantity - diff;
-      } else if (diff < 0) {
-        // Decrease in preserved, add to stock
-        newStockQuantity = stockQuantity + Math.abs(diff);
-      }
-      console.log('DEBUG: Inventory update values', {
-        id: update.id,
-        prevPreserved,
-        stockQuantity,
-        updatePreserved: update.preservedQuantity,
-        diff,
-        newStockQuantity
-      });
-      // Validation: preserved_quantity must not be negative
       if (update.preservedQuantity < 0) {
-        console.error('DEBUG: Preserved quantity negative', { update });
         throw new BadRequestException('Preserved quantity cannot be negative');
       }
-      console.log('DEBUG: Updating inventory row', { id: update.id, prevPreserved, preservedQuantity: update.preservedQuantity, newStockQuantity });
+
+      // Get all rows for this combination_key
+      const { data: rows, error: rowError } = await supabase
+        .from('retail_product_inventory')
+        .select('id, stock_quantity, preserved_quantity')
+        .eq('product_id', productId)
+        .eq('combination_key', update.combinationKey)
+        .order('created_at', { ascending: true });
+
+      if (rowError || !rows || rows.length === 0) {
+        throw new NotFoundException(`Inventory not found for combination: ${update.combinationKey}`);
+      }
+
+      // Calculate current aggregated totals
+      const currentTotalStock = rows.reduce((sum, r) => sum + r.stock_quantity, 0);
+      const currentTotalPreserved = rows.reduce((sum, r) => sum + r.preserved_quantity, 0);
+      const grandTotal = currentTotalStock + currentTotalPreserved;
+      const diff = update.preservedQuantity - currentTotalPreserved;
+
+      // Validate: preserved cannot exceed total stock
+      if (update.preservedQuantity > grandTotal) {
+        throw new BadRequestException(`Preserved quantity (${update.preservedQuantity}) exceeds total stock (${grandTotal}) for ${update.combinationKey}`);
+      }
+
+      if (diff === 0) continue; // No change
+
+      // Apply the diff to the first row (simplest distribution)
+      const firstRow = rows[0];
+      const newStockQuantity = firstRow.stock_quantity - diff;
+      const newPreserved = firstRow.preserved_quantity + diff;
+
       const { error: updError } = await supabase
         .from('retail_product_inventory')
         .update({
-          preserved_quantity: update.preservedQuantity,
+          preserved_quantity: newPreserved,
           stock_quantity: newStockQuantity,
         })
-        .eq('id', update.id)
+        .eq('id', firstRow.id)
         .eq('product_id', productId);
+
       if (updError) {
-        console.error('DEBUG: Failed to update inventory row', updError);
         throw new BadRequestException('Failed to update preserved quantity');
       }
     }
