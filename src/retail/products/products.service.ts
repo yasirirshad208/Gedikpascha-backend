@@ -68,30 +68,49 @@ export class RetailProductsService {
   async getProductById(productId: string, userId: string) {
     const supabase = this.supabaseService.getServiceClient();
 
-    // First, get the user's retail brand
-    const { data: retailBrand, error: brandError } = await supabase
-      .from('retail_brands')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('status', 'approved')
-      .single();
+    // Fetch retail brand and product in parallel
+    const [brandResult, productResult] = await Promise.all([
+      supabase
+        .from('retail_brands')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('status', 'approved')
+        .single(),
+      supabase
+        .from('retail_products')
+        .select('*')
+        .eq('id', productId)
+        .is('deleted_at', null)
+        .single(),
+    ]);
 
-    if (brandError || !retailBrand) {
+    if (brandResult.error || !brandResult.data) {
       throw new NotFoundException('Retail brand not found');
     }
 
-    // Get product
-    const { data: product, error } = await supabase
-      .from('retail_products')
-      .select('*')
-      .eq('id', productId)
-      .eq('retail_brand_id', retailBrand.id)
-      .is('deleted_at', null)
-      .single();
-
-    if (error || !product) {
-      console.error('Product fetch error:', error);
+    if (productResult.error || !productResult.data) {
+      console.error('Product fetch error:', productResult.error);
       throw new NotFoundException('Product not found');
+    }
+
+    const product = productResult.data;
+
+    // Verify the product belongs to this user's brand
+    if (product.retail_brand_id !== brandResult.data.id) {
+      throw new NotFoundException('Product not found');
+    }
+
+    // Fetch recommended retail price from the source wholesale product
+    if (product.source_wholesale_product_id) {
+      const { data: wholesaleProduct } = await supabase
+        .from('wholesale_products')
+        .select('retail_price')
+        .eq('id', product.source_wholesale_product_id)
+        .single();
+
+      if (wholesaleProduct?.retail_price && parseFloat(wholesaleProduct.retail_price) > 0) {
+        product.recommended_retail_price = parseFloat(wholesaleProduct.retail_price);
+      }
     }
 
     return product;
@@ -428,6 +447,45 @@ export class RetailProductsService {
       }
     }
 
+    // Apply dynamic filters from product_details JSONB
+    let parsedDynamicFilters: Record<string, string[]> | undefined;
+    if (dynamicFilters) {
+      try {
+        parsedDynamicFilters = JSON.parse(dynamicFilters);
+      } catch (e) {
+        console.warn('Failed to parse dynamicFilters:', e);
+      }
+    }
+
+    if (parsedDynamicFilters && Object.keys(parsedDynamicFilters).length > 0) {
+      for (const [filterKey, filterValues] of Object.entries(parsedDynamicFilters)) {
+        if (filterValues && filterValues.length > 0) {
+          // Convert filterKey from camelCase to PascalCase for the JSON path
+          const jsonPath = filterKey.charAt(0).toUpperCase() + filterKey.slice(1);
+
+          // Array fields stored as JSON arrays in product_details
+          const arrayFields = [
+            'Features', 'Ingredients', 'Connectivity', 'SpecialFeatures',
+            'Dietary', 'Allergens', 'Usage', 'SafetyStandards', 'SpecialNeeds',
+            'Certifications', 'SpecialDiet', 'SpecialEdition',
+          ];
+
+          if (arrayFields.includes(jsonPath)) {
+            // For array fields, use contains (AND logic)
+            for (const value of filterValues) {
+              query = query.contains('product_details', { [jsonPath]: [value] });
+            }
+          } else {
+            // For single-value fields, use OR logic
+            const conditions = filterValues
+              .map((v) => `product_details->>'${jsonPath}'.eq.${v}`)
+              .join(',');
+            query = query.or(conditions);
+          }
+        }
+      }
+    }
+
     // Apply sorting
     switch (sortBy) {
       case 'price_asc':
@@ -537,6 +595,31 @@ export class RetailProductsService {
     // Apply colors/sizes filter to count (use same variationProductIds from main query)
     if (variationProductIds && variationProductIds.length > 0) {
       countQuery = countQuery.in('id', variationProductIds);
+    }
+
+    // Apply dynamic filters to count query
+    if (parsedDynamicFilters && Object.keys(parsedDynamicFilters).length > 0) {
+      for (const [filterKey, filterValues] of Object.entries(parsedDynamicFilters)) {
+        if (filterValues && filterValues.length > 0) {
+          const jsonPath = filterKey.charAt(0).toUpperCase() + filterKey.slice(1);
+          const arrayFields = [
+            'Features', 'Ingredients', 'Connectivity', 'SpecialFeatures',
+            'Dietary', 'Allergens', 'Usage', 'SafetyStandards', 'SpecialNeeds',
+            'Certifications', 'SpecialDiet', 'SpecialEdition',
+          ];
+
+          if (arrayFields.includes(jsonPath)) {
+            for (const value of filterValues) {
+              countQuery = countQuery.contains('product_details', { [jsonPath]: [value] });
+            }
+          } else {
+            const conditions = filterValues
+              .map((v) => `product_details->>'${jsonPath}'.eq.${v}`)
+              .join(',');
+            countQuery = countQuery.or(conditions);
+          }
+        }
+      }
     }
 
     const { count, error: countError } = await countQuery;

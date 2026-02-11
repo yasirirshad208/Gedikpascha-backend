@@ -85,7 +85,8 @@ BEGIN
           is_auto_imported,
           status,
           meta_title,
-          meta_description
+          meta_description,
+          product_details
         ) VALUES (
           v_retail_brand_id,
           v_wholesale_product.name,
@@ -103,7 +104,8 @@ BEGIN
           true,
           'draft', -- Requires user to set retail_price and activate
           v_wholesale_product.meta_title,
-          v_wholesale_product.meta_description
+          v_wholesale_product.meta_description,
+          v_wholesale_product.product_details
         ) RETURNING id INTO v_retail_product_id;
         
         -- Copy images
