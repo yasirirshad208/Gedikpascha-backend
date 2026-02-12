@@ -47,10 +47,10 @@ export class CreateExchangeDto {
   receiverId: string;
 
   @IsArray()
-  @ArrayMinSize(1)
+  @IsOptional()
   @ValidateNested({ each: true })
   @Type(() => ExchangeItemDto)
-  initiatorItems: ExchangeItemDto[];
+  initiatorItems?: ExchangeItemDto[];
 
   @IsArray()
   @ArrayMinSize(1)
@@ -72,4 +72,12 @@ export class CreateExchangeDto {
   @IsNumber()
   @IsOptional()
   priceDifference?: number;
+
+  @IsOptional()
+  offerAllProducts?: boolean;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  minExchangeValue?: number;
 }

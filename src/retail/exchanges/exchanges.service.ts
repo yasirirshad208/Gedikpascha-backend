@@ -43,7 +43,7 @@ export class ExchangesService {
     }
 
     // Calculate total prices
-    const initiatorTotal = createExchangeDto.initiatorItems.reduce(
+    const initiatorTotal = (createExchangeDto.initiatorItems || []).reduce(
       (sum, item) => sum + item.totalPrice,
       0,
     );
@@ -52,6 +52,8 @@ export class ExchangesService {
       0,
     );
     const priceDifference = receiverTotal - initiatorTotal;
+    const offerAllProducts = createExchangeDto.offerAllProducts || false;
+    const minExchangeValue = createExchangeDto.minExchangeValue || 0;
 
     // Create the exchange
     const { data: exchange, error: exchangeError } = await supabase
@@ -66,6 +68,10 @@ export class ExchangesService {
         status: 'pending',
         payment_method: 'cod',
         payment_status: priceDifference === 0 ? 'paid' : 'pending',
+        offer_all_products: offerAllProducts,
+        min_exchange_value: minExchangeValue,
+        initiator_total: initiatorTotal,
+        receiver_total: receiverTotal,
       })
       .select()
       .single();
@@ -74,28 +80,31 @@ export class ExchangesService {
       throw new BadRequestException(`Failed to create exchange: ${exchangeError?.message || 'Unknown error'}`);
     }
 
-    // Insert initiator items
-    const initiatorItemsData = createExchangeDto.initiatorItems.map((item) => ({
-      exchange_id: exchange.id,
-      side: 'initiator',
-      product_id: item.productId,
-      product_name: item.productName,
-      product_image_url: item.productImageUrl,
-      sku: item.sku,
-      quantity: item.quantity,
-      unit_price: item.unitPrice,
-      total_price: item.totalPrice,
-      variation_details: item.variationDetails,
-    }));
+    // Insert initiator items (may be empty if offerAllProducts is true)
+    const initiatorItemsList = createExchangeDto.initiatorItems || [];
+    if (initiatorItemsList.length > 0) {
+      const initiatorItemsData = initiatorItemsList.map((item) => ({
+        exchange_id: exchange.id,
+        side: 'initiator',
+        product_id: item.productId,
+        product_name: item.productName,
+        product_image_url: item.productImageUrl,
+        sku: item.sku,
+        quantity: item.quantity,
+        unit_price: item.unitPrice,
+        total_price: item.totalPrice,
+        variation_details: item.variationDetails,
+      }));
 
-    const { error: initiatorItemsError } = await supabase
-      .from('retail_exchange_items')
-      .insert(initiatorItemsData);
+      const { error: initiatorItemsError } = await supabase
+        .from('retail_exchange_items')
+        .insert(initiatorItemsData);
 
-    if (initiatorItemsError) {
-      // Rollback: delete the exchange
-      await supabase.from('retail_product_exchanges').delete().eq('id', exchange.id);
-      throw new BadRequestException(`Failed to add initiator items: ${initiatorItemsError.message}`);
+      if (initiatorItemsError) {
+        // Rollback: delete the exchange
+        await supabase.from('retail_product_exchanges').delete().eq('id', exchange.id);
+        throw new BadRequestException(`Failed to add initiator items: ${initiatorItemsError.message}`);
+      }
     }
 
     // Insert receiver items
@@ -220,7 +229,7 @@ export class ExchangesService {
   }
 
   // Approve exchange (receiver action)
-  async approveExchange(exchangeId: string, userId: string, receiverAddressId: string) {
+  async approveExchange(exchangeId: string, userId: string, receiverAddressId: string, selectedInitiatorItems?: any[]) {
     const exchange = await this.getExchangeById(exchangeId, userId);
 
     if (exchange.receiver_id !== userId) {
@@ -233,18 +242,72 @@ export class ExchangesService {
 
     const supabase = this.supabaseService.getServiceClient();
 
-    // Update exchange status to approved and set receiver address
-    const { error } = await supabase
-      .from('retail_product_exchanges')
-      .update({
-        status: 'approved',
-        approved_at: new Date().toISOString(),
-        receiver_address_id: receiverAddressId,
-      })
-      .eq('id', exchangeId);
+    // If offer_all_products is true, receiver must pick initiator items now
+    if (exchange.offer_all_products && selectedInitiatorItems && selectedInitiatorItems.length > 0) {
+      // Validate minimum exchange value
+      const selectedTotal = selectedInitiatorItems.reduce((sum: number, item: any) => sum + (item.totalPrice || 0), 0);
+      if (exchange.min_exchange_value > 0 && selectedTotal < exchange.min_exchange_value) {
+        throw new BadRequestException(
+          `Selected products must be worth at least ₺${exchange.min_exchange_value}. Current: ₺${selectedTotal.toFixed(2)}`,
+        );
+      }
 
-    if (error) {
-      throw new BadRequestException('Failed to approve exchange');
+      // Insert the items receiver picked from initiator's catalog
+      const initiatorItemsData = selectedInitiatorItems.map((item: any) => ({
+        exchange_id: exchangeId,
+        side: 'initiator',
+        product_id: item.productId,
+        product_name: item.productName,
+        product_image_url: item.productImageUrl || '',
+        sku: item.sku || '',
+        quantity: item.quantity,
+        unit_price: item.unitPrice,
+        total_price: item.totalPrice,
+        variation_details: item.variationDetails || null,
+      }));
+
+      const { error: itemsError } = await supabase
+        .from('retail_exchange_items')
+        .insert(initiatorItemsData);
+
+      if (itemsError) {
+        throw new BadRequestException(`Failed to add selected items: ${itemsError.message}`);
+      }
+
+      // Recalculate price difference
+      const receiverTotal = exchange.receiver_total || 0;
+      const newPriceDifference = receiverTotal - selectedTotal;
+
+      // Update exchange with new totals
+      const { error: updateError } = await supabase
+        .from('retail_product_exchanges')
+        .update({
+          status: 'approved',
+          approved_at: new Date().toISOString(),
+          receiver_address_id: receiverAddressId,
+          initiator_total: selectedTotal,
+          price_difference: newPriceDifference,
+          payment_status: newPriceDifference === 0 ? 'paid' : 'pending',
+        })
+        .eq('id', exchangeId);
+
+      if (updateError) {
+        throw new BadRequestException('Failed to approve exchange');
+      }
+    } else {
+      // Standard approval (items already set by initiator)
+      const { error } = await supabase
+        .from('retail_product_exchanges')
+        .update({
+          status: 'approved',
+          approved_at: new Date().toISOString(),
+          receiver_address_id: receiverAddressId,
+        })
+        .eq('id', exchangeId);
+
+      if (error) {
+        throw new BadRequestException('Failed to approve exchange');
+      }
     }
 
     // Lock inventory for both sides
@@ -666,9 +729,11 @@ export class ExchangesService {
       .select(`
         id,
         name,
+        slug,
         retail_price,
         sku,
         stock_quantity,
+        categories(name),
         retail_product_images(image_url, is_primary)
       `)
       .eq('retail_brand_id', retailBrand.id)
@@ -690,9 +755,11 @@ export class ExchangesService {
       return {
         id: product.id,
         name: product.name,
+        slug: product.slug,
         wholesale_price: product.retail_price, // Map retail_price to wholesale_price for compatibility
         sku: product.sku,
         stock_quantity: product.stock_quantity,
+        category: (product as any).categories?.name || '',
         images: sortedImages,
       };
     });
@@ -722,9 +789,11 @@ export class ExchangesService {
       .select(`
         id,
         name,
+        slug,
         retail_price,
         sku,
         stock_quantity,
+        categories(name),
         retail_product_images(image_url, is_primary)
       `)
       .eq('retail_brand_id', retailerId)
@@ -746,14 +815,142 @@ export class ExchangesService {
       return {
         id: product.id,
         name: product.name,
+        slug: product.slug,
         wholesale_price: product.retail_price, // Map retail_price to wholesale_price for compatibility
         sku: product.sku,
         stock_quantity: product.stock_quantity,
+        category: (product as any).categories?.name || '',
         images: sortedImages,
       };
     });
 
     return transformedProducts;
+  }
+
+  // Get initiator's products for receiver to browse during approval (with filters)
+  async getInitiatorProducts(
+    exchangeId: string,
+    userId: string,
+    filters: { search?: string; sortBy?: string; priceRange?: string; category?: string },
+  ) {
+    const supabase = this.supabaseService.getServiceClient();
+
+    // First verify the exchange exists and the user is the receiver
+    const { data: exchange, error: exchErr } = await supabase
+      .from('retail_product_exchanges')
+      .select('initiator_id, receiver_id, offer_all_products')
+      .eq('id', exchangeId)
+      .single();
+
+    if (exchErr || !exchange) {
+      throw new NotFoundException('Exchange not found');
+    }
+
+    if (exchange.receiver_id !== userId) {
+      throw new ForbiddenException('Only the receiver can browse initiator products');
+    }
+
+    // Get initiator's retail brand
+    const { data: retailBrand } = await supabase
+      .from('retail_brands')
+      .select('id')
+      .eq('user_id', exchange.initiator_id)
+      .eq('status', 'approved')
+      .single();
+
+    if (!retailBrand) {
+      return { products: [], categories: [] };
+    }
+
+    // Get distinct categories for filter options
+    const { data: catData } = await supabase
+      .from('retail_products')
+      .select('categories(name)')
+      .eq('retail_brand_id', retailBrand.id)
+      .eq('status', 'active')
+      .gt('stock_quantity', 0)
+      .is('deleted_at', null);
+
+    const categories = [...new Set((catData || []).map((p: any) => p.categories?.name).filter(Boolean))];
+
+    // Build product query with filters
+    let query = supabase
+      .from('retail_products')
+      .select(`
+        id,
+        name,
+        slug,
+        retail_price,
+        sku,
+        stock_quantity,
+        category_id,
+        categories(name),
+        retail_product_images(image_url, is_primary)
+      `)
+      .eq('retail_brand_id', retailBrand.id)
+      .eq('status', 'active')
+      .gt('stock_quantity', 0)
+      .is('deleted_at', null);
+
+    // Apply search filter
+    if (filters.search?.trim()) {
+      query = query.ilike('name', `%${filters.search.trim()}%`);
+    }
+
+    // Apply category filter - look up category_id by name
+    if (filters.category && filters.category !== 'all') {
+      const { data: catLookup } = await supabase
+        .from('categories')
+        .select('id')
+        .eq('name', filters.category)
+        .single();
+      if (catLookup) {
+        query = query.eq('category_id', catLookup.id);
+      }
+    }
+
+    // Apply price range filter
+    if (filters.priceRange && filters.priceRange !== 'all') {
+      const [min, max] = filters.priceRange.split('-');
+      if (min) query = query.gte('retail_price', parseFloat(min));
+      if (max) query = query.lte('retail_price', parseFloat(max));
+    }
+
+    // Apply sorting
+    if (filters.sortBy === 'price_asc') {
+      query = query.order('retail_price', { ascending: true });
+    } else if (filters.sortBy === 'price_desc') {
+      query = query.order('retail_price', { ascending: false });
+    } else if (filters.sortBy === 'newest') {
+      query = query.order('created_at', { ascending: false });
+    } else {
+      query = query.order('name', { ascending: true });
+    }
+
+    const { data: products, error } = await query;
+
+    if (error) {
+      throw new BadRequestException('Failed to fetch initiator products');
+    }
+
+    const transformedProducts = (products || []).map((product: any) => {
+      const sortedImages = (product.retail_product_images || [])
+        .sort((a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0))
+        .map((img: any) => img.image_url);
+
+      return {
+        id: product.id,
+        name: product.name,
+        slug: product.slug,
+        wholesale_price: product.retail_price,
+        sku: product.sku,
+        stock_quantity: product.stock_quantity,
+        category: product.categories?.name || '',
+        images: sortedImages,
+      };
+    });
+
+    return { products: transformedProducts, categories };
   }
 
   // Get all retailers for exchange marketplace

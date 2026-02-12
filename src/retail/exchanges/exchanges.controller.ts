@@ -78,9 +78,10 @@ export class ExchangesController {
     @Param('id') id: string,
     @Headers('authorization') authHeader: string,
     @Body('receiverAddressId') receiverAddressId: string,
+    @Body('selectedInitiatorItems') selectedInitiatorItems?: any[],
   ) {
     const user = await this.getUserFromToken(authHeader);
-    return this.exchangesService.approveExchange(id, user.id, receiverAddressId);
+    return this.exchangesService.approveExchange(id, user.id, receiverAddressId, selectedInitiatorItems);
   }
 
   // Reject exchange (receiver action)
@@ -161,5 +162,19 @@ export class ExchangesController {
   @Get('marketplace/retailer-products/:retailerId')
   async getRetailerProducts(@Param('retailerId') retailerId: string) {
     return this.exchangesService.getRetailerProducts(retailerId);
+  }
+
+  // Get initiator's products for receiver to browse during approval
+  @Get(':id/initiator-products')
+  async getInitiatorProducts(
+    @Param('id') id: string,
+    @Headers('authorization') authHeader: string,
+    @Query('search') search?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('priceRange') priceRange?: string,
+    @Query('category') category?: string,
+  ) {
+    const user = await this.getUserFromToken(authHeader);
+    return this.exchangesService.getInitiatorProducts(id, user.id, { search, sortBy, priceRange, category });
   }
 }
