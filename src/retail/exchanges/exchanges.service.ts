@@ -738,6 +738,7 @@ export class ExchangesService {
       `)
       .eq('retail_brand_id', retailBrand.id)
       .eq('status', 'active')
+      .eq('is_exchangeable', true)
       .gt('stock_quantity', 0)
       .is('deleted_at', null);
 
@@ -798,6 +799,7 @@ export class ExchangesService {
       `)
       .eq('retail_brand_id', retailerId)
       .eq('status', 'active')
+      .eq('is_exchangeable', true)
       .gt('stock_quantity', 0)
       .is('deleted_at', null);
 
@@ -981,17 +983,30 @@ export class ExchangesService {
 
     const { data: retailers, error } = await query.limit(50);
 
-    console.log('[getRetailers] Query result:', { 
-      retailersCount: retailers?.length, 
-      error: error?.message,
-      retailers: retailers 
-    });
-
     if (error) {
       console.error('Error fetching retailers:', error);
       throw new BadRequestException('Failed to fetch retailers');
     }
 
-    return retailers || [];
+    if (!retailers || retailers.length === 0) {
+      return [];
+    }
+
+    // Filter out retailers that have no exchangeable products
+    const retailerIds = retailers.map((r: any) => r.id);
+    const { data: exchangeableCounts } = await supabase
+      .from('retail_products')
+      .select('retail_brand_id')
+      .in('retail_brand_id', retailerIds)
+      .eq('is_exchangeable', true)
+      .eq('status', 'active')
+      .gt('stock_quantity', 0)
+      .is('deleted_at', null);
+
+    const brandsWithExchangeable = new Set(
+      (exchangeableCounts || []).map((p: any) => p.retail_brand_id)
+    );
+
+    return retailers.filter((r: any) => brandsWithExchangeable.has(r.id));
   }
 }

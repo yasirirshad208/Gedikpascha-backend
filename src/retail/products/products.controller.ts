@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Put,
+  Patch,
   Delete,
   Body,
   Param,
@@ -55,6 +56,14 @@ export class RetailProductsController {
       sizes,
       dynamicFilters,
     );
+  }
+
+  @Get('brand-categories')
+  async getBrandCategories(@Query('brandId') brandId: string) {
+    if (!brandId) {
+      return [];
+    }
+    return this.productsService.getBrandCategories(brandId);
   }
 
   @Get('slug/:slug')
@@ -168,6 +177,24 @@ export class RetailProductsController {
       productId,
       userData.user.id,
       body.updates,
+    );
+  }
+
+  @Patch('my-products/:id/exchangeable')
+  async toggleExchangeable(
+    @Param('id') productId: string,
+    @Headers('authorization') authHeader: string,
+    @Body() body: { isExchangeable: boolean },
+  ) {
+    const token = authHeader?.replace('Bearer ', '');
+    if (!token) throw new UnauthorizedException('Authentication required');
+    const supabase = this.supabaseService.getClient();
+    const { data: userData, error } = await supabase.auth.getUser(token);
+    if (error || !userData.user) throw new UnauthorizedException('Invalid or expired token');
+    return this.productsService.toggleExchangeable(
+      productId,
+      userData.user.id,
+      body.isExchangeable,
     );
   }
 }

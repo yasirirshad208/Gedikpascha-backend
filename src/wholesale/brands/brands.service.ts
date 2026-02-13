@@ -461,6 +461,40 @@ export class BrandsService {
     };
   }
 
+  async getBrandProductCategories(brandId: string) {
+    const serviceClient = this.supabaseService.getServiceClient();
+
+    // Get distinct category_ids from brand's active products
+    const { data: products, error } = await serviceClient
+      .from('wholesale_products')
+      .select('category_id')
+      .eq('wholesale_brand_id', brandId)
+      .eq('status', 'active')
+      .is('deleted_at', null);
+
+    if (error || !products || products.length === 0) {
+      return [];
+    }
+
+    const categoryIds = [...new Set(products.map((p: any) => p.category_id).filter(Boolean))];
+    if (categoryIds.length === 0) return [];
+
+    const { data: categories, error: catError } = await serviceClient
+      .from('categories')
+      .select('id, name, slug')
+      .in('id', categoryIds)
+      .eq('is_active', true)
+      .order('name', { ascending: true });
+
+    if (catError || !categories) return [];
+
+    return categories.map((c: any) => ({
+      id: c.id,
+      name: c.name,
+      slug: c.slug,
+    }));
+  }
+
   async getBrandProducts(
     brandId: string,
     page = 1,
@@ -471,12 +505,13 @@ export class BrandsService {
       sortBy?: string;
       priceRange?: string;
       minOrder?: string;
+      category?: string;
       colors?: string[];
       sizes?: string[];
     } = {},
   ) {
     const serviceClient = this.supabaseService.getServiceClient();
-    const { filter, search, sortBy, priceRange, minOrder, colors, sizes } = opts;
+    const { filter, search, sortBy, priceRange, minOrder, category, colors, sizes } = opts;
 
     // Verify brand exists and is approved
     const { data: brand, error: brandError } = await serviceClient
@@ -574,6 +609,25 @@ export class BrandsService {
       query = query.or(
         `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`,
       );
+    }
+
+    // Category filter
+    if (category && category !== 'all') {
+      // Support both slug and UUID
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(category);
+      if (isUuid) {
+        query = query.eq('category_id', category);
+      } else {
+        const { data: catData } = await serviceClient
+          .from('categories')
+          .select('id')
+          .eq('slug', category)
+          .eq('is_active', true)
+          .single();
+        if (catData) {
+          query = query.eq('category_id', catData.id);
+        }
+      }
     }
 
     // Filter (sale, best-products, recent)

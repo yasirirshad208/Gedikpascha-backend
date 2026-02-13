@@ -5,6 +5,40 @@ import { SupabaseService } from '../../supabase/supabase.service';
 export class RetailProductsService {
   constructor(private readonly supabaseService: SupabaseService) {}
 
+  async getBrandCategories(brandId: string) {
+    const supabase = this.supabaseService.getServiceClient();
+
+    // Get distinct category_ids from brand's active products
+    const { data: products, error } = await supabase
+      .from('retail_products')
+      .select('category_id')
+      .eq('retail_brand_id', brandId)
+      .eq('status', 'active')
+      .is('deleted_at', null);
+
+    if (error || !products || products.length === 0) {
+      return [];
+    }
+
+    const categoryIds = [...new Set(products.map((p: any) => p.category_id).filter(Boolean))];
+    if (categoryIds.length === 0) return [];
+
+    const { data: categories, error: catError } = await supabase
+      .from('categories')
+      .select('id, name, slug')
+      .in('id', categoryIds)
+      .eq('is_active', true)
+      .order('name', { ascending: true });
+
+    if (catError || !categories) return [];
+
+    return categories.map((c: any) => ({
+      id: c.id,
+      name: c.name,
+      slug: c.slug,
+    }));
+  }
+
   async getMyProducts(
     userId: string,
     status?: 'draft' | 'active' | 'inactive' | 'out_of_stock',
@@ -63,6 +97,48 @@ export class RetailProductsService {
     }
 
     return products || [];
+  }
+
+  async toggleExchangeable(productId: string, userId: string, isExchangeable: boolean) {
+    const supabase = this.supabaseService.getServiceClient();
+
+    // Get user's retail brand
+    const { data: retailBrand, error: brandError } = await supabase
+      .from('retail_brands')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('status', 'approved')
+      .single();
+
+    if (brandError || !retailBrand) {
+      throw new NotFoundException('Retail brand not found');
+    }
+
+    // Verify the product belongs to the user's brand
+    const { data: product, error: productError } = await supabase
+      .from('retail_products')
+      .select('id')
+      .eq('id', productId)
+      .eq('retail_brand_id', retailBrand.id)
+      .is('deleted_at', null)
+      .single();
+
+    if (productError || !product) {
+      throw new NotFoundException('Product not found');
+    }
+
+    const { data: updated, error: updateError } = await supabase
+      .from('retail_products')
+      .update({ is_exchangeable: isExchangeable })
+      .eq('id', productId)
+      .select('id, is_exchangeable')
+      .single();
+
+    if (updateError) {
+      throw new BadRequestException('Failed to update exchangeable status');
+    }
+
+    return updated;
   }
 
   async getProductById(productId: string, userId: string) {

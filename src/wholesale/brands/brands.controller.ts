@@ -112,6 +112,13 @@ export class BrandsController {
     return this.brandsService.getBrandByName(brandName);
   }
 
+  // Public endpoint to get distinct product categories for a brand
+  @Get('name/:brandName/categories')
+  async getBrandProductCategories(@Param('brandName') brandName: string) {
+    const brand = await this.brandsService.getBrandByName(brandName);
+    return this.brandsService.getBrandProductCategories(brand.id);
+  }
+
   // Public endpoint to get brand products by brand_name (only for approved brands)
   @Get('name/:brandName/products')
   async getBrandProductsByName(
@@ -123,6 +130,7 @@ export class BrandsController {
     @Query('sortBy') sortBy?: string,
     @Query('priceRange') priceRange?: string,
     @Query('minOrder') minOrder?: string,
+    @Query('category') category?: string,
     @Query('colors') colors?: string,
     @Query('sizes') sizes?: string,
   ) {
@@ -133,6 +141,7 @@ export class BrandsController {
       sortBy,
       priceRange,
       minOrder,
+      category,
       colors: colors ? colors.split(',').filter(Boolean) : undefined,
       sizes: sizes ? sizes.split(',').filter(Boolean) : undefined,
     });
