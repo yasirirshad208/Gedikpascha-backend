@@ -23,7 +23,7 @@ export class RetailProductsController {
   constructor(
     private readonly productsService: RetailProductsService,
     private readonly supabaseService: SupabaseService,
-  ) {}
+  ) { }
 
   @Get()
   async getPublicProducts(
@@ -177,6 +177,22 @@ export class RetailProductsController {
       productId,
       userData.user.id,
       body.updates,
+    );
+  }
+
+  @Patch('my-products/bulk-status/exchangeable')
+  async bulkToggleExchangeable(
+    @Headers('authorization') authHeader: string,
+    @Body() body: { isExchangeable: boolean },
+  ) {
+    const token = authHeader?.replace('Bearer ', '');
+    if (!token) throw new UnauthorizedException('Authentication required');
+    const supabase = this.supabaseService.getClient();
+    const { data: userData, error } = await supabase.auth.getUser(token);
+    if (error || !userData.user) throw new UnauthorizedException('Invalid or expired token');
+    return this.productsService.setAllExchangeable(
+      userData.user.id,
+      body.isExchangeable,
     );
   }
 

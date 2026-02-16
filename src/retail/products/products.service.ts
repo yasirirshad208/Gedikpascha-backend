@@ -3,7 +3,7 @@ import { SupabaseService } from '../../supabase/supabase.service';
 
 @Injectable()
 export class RetailProductsService {
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly supabaseService: SupabaseService) { }
 
   async getBrandCategories(brandId: string) {
     const supabase = this.supabaseService.getServiceClient();
@@ -139,6 +139,34 @@ export class RetailProductsService {
     }
 
     return updated;
+  }
+
+  async setAllExchangeable(userId: string, isExchangeable: boolean) {
+    const supabase = this.supabaseService.getServiceClient();
+
+    // Get user's retail brand
+    const { data: retailBrand, error: brandError } = await supabase
+      .from('retail_brands')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('status', 'approved')
+      .single();
+
+    if (brandError || !retailBrand) {
+      throw new NotFoundException('Retail brand not found');
+    }
+
+    const { error: updateError } = await supabase
+      .from('retail_products')
+      .update({ is_exchangeable: isExchangeable })
+      .eq('retail_brand_id', retailBrand.id)
+      .is('deleted_at', null);
+
+    if (updateError) {
+      throw new BadRequestException('Failed to update all products exchangeable status');
+    }
+
+    return { success: true, count: 'all' };
   }
 
   async getProductById(productId: string, userId: string) {
@@ -378,7 +406,7 @@ export class RetailProductsService {
         .eq('slug', category)
         .eq('is_active', true)
         .single();
-      
+
       if (categoryError || !categoryData) {
         // If category not found, return empty results
         return {
@@ -391,7 +419,7 @@ export class RetailProductsService {
           },
         };
       }
-      
+
       // Try to apply category filter, but don't fail if column doesn't exist
       // The error will be caught when the query executes
       query = query.eq('category_id', categoryData.id);
@@ -405,7 +433,7 @@ export class RetailProductsService {
         .eq('slug', subcategory)
         .eq('is_active', true)
         .single();
-      
+
       if (subcategoryError || !subcategoryData) {
         // If subcategory not found, return empty results
         return {
@@ -418,7 +446,7 @@ export class RetailProductsService {
           },
         };
       }
-      
+
       // Try to apply subcategory filter, but don't fail if column doesn't exist
       // The error will be caught when the query executes
       query = query.eq('subcategory_id', subcategoryData.id);
@@ -600,7 +628,7 @@ export class RetailProductsService {
         .eq('slug', category)
         .eq('is_active', true)
         .single();
-      
+
       if (!categoryError && categoryData) {
         // Try to apply category filter, but don't fail if column doesn't exist
         // The error will be caught when the query executes
@@ -615,7 +643,7 @@ export class RetailProductsService {
         .eq('slug', subcategory)
         .eq('is_active', true)
         .single();
-      
+
       if (!subcategoryError && subcategoryData) {
         // Try to apply subcategory filter, but don't fail if column doesn't exist
         // The error will be caught when the query executes
@@ -702,23 +730,23 @@ export class RetailProductsService {
 
     // Check if error is due to missing category_id or subcategory_id column
     // If so, skip category filtering and return all products
-    if (countError && countError.code === '42703' && 
-        (countError.message?.includes('category_id') || countError.message?.includes('subcategory_id'))) {
+    if (countError && countError.code === '42703' &&
+      (countError.message?.includes('category_id') || countError.message?.includes('subcategory_id'))) {
       console.warn('Category filtering not available - category_id/subcategory_id columns do not exist.');
       console.warn('Please run migration: backend/database/migrations/retail/add_category_fields_to_retail_products.sql');
       console.warn('Continuing without category filter...');
-      
+
       // Rebuild queries without category filters
       countQuery = supabase
         .from('retail_products')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'active')
         .is('deleted_at', null);
-      
+
       if (brandId) {
         countQuery = countQuery.eq('retail_brand_id', brandId);
       }
-      
+
       // Rebuild main query without category filters
       query = supabase
         .from('retail_products')
@@ -730,11 +758,11 @@ export class RetailProductsService {
         .eq('status', 'active')
         .eq('retail_brands.status', 'approved')
         .is('deleted_at', null);
-      
+
       if (brandId) {
         query = query.eq('retail_brand_id', brandId);
       }
-      
+
       // Reapply other filters (filter, priceRange, search, sortBy)
       if (filter) {
         switch (filter) {
@@ -744,7 +772,7 @@ export class RetailProductsService {
             break;
         }
       }
-      
+
       if (priceRange) {
         switch (priceRange) {
           case 'under_50':
@@ -765,13 +793,13 @@ export class RetailProductsService {
             break;
         }
       }
-      
+
       if (search && search.trim()) {
         const searchTerm = `%${search.trim()}%`;
         query = query.or(`name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`);
         countQuery = countQuery.or(`name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`);
       }
-      
+
       // Apply sorting
       switch (sortBy) {
         case 'price_asc':
@@ -789,20 +817,20 @@ export class RetailProductsService {
         default:
           query = query.order('created_at', { ascending: false });
       }
-      
+
       // Re-execute count query
       const { count: retryCount, error: retryCountError } = await countQuery;
       if (retryCountError) {
         console.error('Error counting public retail products:', retryCountError);
       }
-      
+
       // Apply pagination
       const from = (page - 1) * limit;
       const to = from + limit - 1;
       query = query.range(from, to);
-      
+
       const { data: products, error: retryError } = await query;
-      
+
       if (retryError) {
         console.error('Error fetching public retail products:', retryError);
         return {
@@ -815,9 +843,9 @@ export class RetailProductsService {
           },
         };
       }
-      
+
       const totalPages = retryCount ? Math.ceil(retryCount / limit) : 0;
-      
+
       return {
         products: products || [],
         pagination: {
@@ -828,7 +856,7 @@ export class RetailProductsService {
         },
       };
     }
-    
+
     if (countError) {
       console.error('Error counting public retail products:', countError);
     }
@@ -842,12 +870,12 @@ export class RetailProductsService {
 
     if (error) {
       // Check if error is due to missing category_id column
-      if (error.code === '42703' && 
-          (error.message?.includes('category_id') || error.message?.includes('subcategory_id'))) {
+      if (error.code === '42703' &&
+        (error.message?.includes('category_id') || error.message?.includes('subcategory_id'))) {
         console.warn('Category filtering not available - category_id/subcategory_id columns do not exist.');
         console.warn('Please run migration: backend/database/migrations/retail/add_category_fields_to_retail_products.sql');
         console.warn('Returning empty results for category filter...');
-        
+
         return {
           products: [],
           pagination: {
@@ -1041,7 +1069,7 @@ export class RetailProductsService {
         }
       }
     }
-    
+
     // Aggregate by combination_key (multiple rows can exist per key due to different order sources)
     const aggregated = new Map<string, { combination_key: string; stock_quantity: number; preserved_quantity: number; row_count: number }>();
     for (const row of rows) {
@@ -1060,7 +1088,7 @@ export class RetailProductsService {
         });
       }
     }
-    
+
     return Array.from(aggregated.values());
   }
 
