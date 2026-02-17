@@ -23,7 +23,7 @@ export class ExchangesController {
   constructor(
     private readonly exchangesService: ExchangesService,
     private readonly supabaseService: SupabaseService,
-  ) {}
+  ) { }
 
   private async getUserFromToken(authHeader?: string) {
     const token = authHeader?.replace('Bearer ', '');
@@ -62,62 +62,7 @@ export class ExchangesController {
     return this.exchangesService.getExchanges(user.id, role, status);
   }
 
-  // Get single exchange by ID
-  @Get(':id')
-  async getExchange(
-    @Param('id') id: string,
-    @Headers('authorization') authHeader: string,
-  ) {
-    const user = await this.getUserFromToken(authHeader);
-    return this.exchangesService.getExchangeById(id, user.id);
-  }
-
-  // Approve exchange (receiver action)
-  @Patch(':id/approve')
-  async approveExchange(
-    @Param('id') id: string,
-    @Headers('authorization') authHeader: string,
-    @Body('receiverAddressId') receiverAddressId: string,
-    @Body('selectedInitiatorItems') selectedInitiatorItems?: any[],
-  ) {
-    const user = await this.getUserFromToken(authHeader);
-    return this.exchangesService.approveExchange(id, user.id, receiverAddressId, selectedInitiatorItems);
-  }
-
-  // Reject exchange (receiver action)
-  @Patch(':id/reject')
-  async rejectExchange(
-    @Param('id') id: string,
-    @Headers('authorization') authHeader: string,
-    @Body('reason') reason?: string,
-  ) {
-    const user = await this.getUserFromToken(authHeader);
-    return this.exchangesService.rejectExchange(id, user.id, reason);
-  }
-
-  // Cancel exchange (initiator action)
-  @Patch(':id/cancel')
-  async cancelExchange(
-    @Param('id') id: string,
-    @Headers('authorization') authHeader: string,
-    @Body('reason') reason?: string,
-  ) {
-    const user = await this.getUserFromToken(authHeader);
-    return this.exchangesService.cancelExchange(id, user.id, reason);
-  }
-
-  // Update delivery status
-  @Patch(':id/delivery')
-  async updateDeliveryStatus(
-    @Param('id') id: string,
-    @Headers('authorization') authHeader: string,
-    @Body() updateDto: UpdateDeliveryStatusDto,
-  ) {
-    const user = await this.getUserFromToken(authHeader);
-    return this.exchangesService.updateDeliveryStatus(id, user.id, updateDto);
-  }
-
-  // Address management
+  // Address management (MUST be before :id routes)
   @Get('addresses/list')
   async getAddresses(@Headers('authorization') authHeader: string) {
     const user = await this.getUserFromToken(authHeader);
@@ -143,7 +88,7 @@ export class ExchangesController {
     return this.exchangesService.deleteAddress(user.id, id);
   }
 
-  // Marketplace endpoints
+  // Marketplace endpoints (MUST be before :id routes)
   @Get('marketplace/retailers')
   async getRetailers(
     @Headers('authorization') authHeader: string,
@@ -160,11 +105,97 @@ export class ExchangesController {
   }
 
   @Get('marketplace/retailer-products/:retailerId')
-  async getRetailerProducts(@Param('retailerId') retailerId: string) {
-    return this.exchangesService.getRetailerProducts(retailerId);
+  async getRetailerProducts(
+    @Param('retailerId') retailerId: string,
+    @Query('search') search?: string,
+    @Query('category') category?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('priceRange') priceRange?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.exchangesService.getRetailerProducts(retailerId, {
+      search,
+      category,
+      sortBy,
+      priceRange,
+      page: page ? parseInt(page) : 1,
+      limit: limit ? parseInt(limit) : 24,
+    });
   }
 
-  // Get initiator's products for receiver to browse during approval
+  @Get('marketplace/all-products')
+  async getAllExchangeableProducts(
+    @Headers('authorization') authHeader: string,
+    @Query('search') search?: string,
+    @Query('category') category?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('priceRange') priceRange?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const user = await this.getUserFromToken(authHeader);
+    return this.exchangesService.getAllExchangeableProducts(user.id, {
+      search,
+      category,
+      sortBy,
+      priceRange,
+      page: page ? parseInt(page) : 1,
+      limit: limit ? parseInt(limit) : 24,
+    });
+  }
+
+  // Parameterized :id routes (MUST be LAST to avoid matching static routes)
+  @Get(':id')
+  async getExchange(
+    @Param('id') id: string,
+    @Headers('authorization') authHeader: string,
+  ) {
+    const user = await this.getUserFromToken(authHeader);
+    return this.exchangesService.getExchangeById(id, user.id);
+  }
+
+  @Patch(':id/approve')
+  async approveExchange(
+    @Param('id') id: string,
+    @Headers('authorization') authHeader: string,
+    @Body('receiverAddressId') receiverAddressId: string,
+    @Body('selectedInitiatorItems') selectedInitiatorItems?: any[],
+  ) {
+    const user = await this.getUserFromToken(authHeader);
+    return this.exchangesService.approveExchange(id, user.id, receiverAddressId, selectedInitiatorItems);
+  }
+
+  @Patch(':id/reject')
+  async rejectExchange(
+    @Param('id') id: string,
+    @Headers('authorization') authHeader: string,
+    @Body('reason') reason?: string,
+  ) {
+    const user = await this.getUserFromToken(authHeader);
+    return this.exchangesService.rejectExchange(id, user.id, reason);
+  }
+
+  @Patch(':id/cancel')
+  async cancelExchange(
+    @Param('id') id: string,
+    @Headers('authorization') authHeader: string,
+    @Body('reason') reason?: string,
+  ) {
+    const user = await this.getUserFromToken(authHeader);
+    return this.exchangesService.cancelExchange(id, user.id, reason);
+  }
+
+  @Patch(':id/delivery')
+  async updateDeliveryStatus(
+    @Param('id') id: string,
+    @Headers('authorization') authHeader: string,
+    @Body() updateDto: UpdateDeliveryStatusDto,
+  ) {
+    const user = await this.getUserFromToken(authHeader);
+    return this.exchangesService.updateDeliveryStatus(id, user.id, updateDto);
+  }
+
   @Get(':id/initiator-products')
   async getInitiatorProducts(
     @Param('id') id: string,

@@ -26,8 +26,8 @@ CREATE TABLE IF NOT EXISTS wholesale_cart (
   CONSTRAINT positive_unit_price CHECK (unit_price IS NULL OR unit_price >= 0),
   CONSTRAINT positive_pack_price CHECK (pack_price IS NULL OR pack_price >= 0),
 
-  -- Each user can only have one entry per product + pack size combination
-  CONSTRAINT unique_user_product_pack UNIQUE (user_id, product_id, pack_size_id)
+  -- NOTE: No unique constraint on (user_id, product_id, pack_size_id)
+  -- because users may add the same product+pack with different selected_variations
 );
 
 -- Create indexes for better query performance

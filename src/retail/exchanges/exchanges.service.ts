@@ -9,7 +9,7 @@ import {
 
 @Injectable()
 export class ExchangesService {
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly supabaseService: SupabaseService) { }
 
   // Create a new exchange request
   async createExchange(userId: string, createExchangeDto: CreateExchangeDto) {
@@ -30,7 +30,7 @@ export class ExchangesService {
     if (brandsError) {
       throw new BadRequestException(`User verification failed: ${brandsError.message}`);
     }
-    
+
     if (!retailBrands || retailBrands.length !== 2) {
       throw new BadRequestException(`Both users must be approved retailers - found ${retailBrands?.length || 0} approved retail brands`);
     }
@@ -752,7 +752,7 @@ export class ExchangesService {
       const sortedImages = (product.retail_product_images || [])
         .sort((a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0))
         .map((img: any) => img.image_url);
-      
+
       return {
         id: product.id,
         name: product.name,
@@ -769,13 +769,16 @@ export class ExchangesService {
   }
 
   // Get other retailer's products available for exchange
-  async getRetailerProducts(retailerId: string) {
+  async getRetailerProducts(retailerId: string, filters?: { search?: string; category?: string; sortBy?: string; priceRange?: string; page?: number; limit?: number }) {
     const supabase = this.supabaseService.getServiceClient();
+    const page = filters?.page || 1;
+    const limit = filters?.limit || 24;
+    const offset = (page - 1) * limit;
 
     // Verify retailer brand exists (retailerId is actually the brand_id)
     const { data: retailBrand } = await supabase
       .from('retail_brands')
-      .select('id')
+      .select('id, brand_name, display_name')
       .eq('id', retailerId)
       .eq('status', 'approved')
       .single();
@@ -784,8 +787,24 @@ export class ExchangesService {
       throw new NotFoundException('Retailer not found');
     }
 
-    // Fetch from retail_products table
-    const { data: products, error } = await supabase
+    // First get all categories for filter dropdown
+    const { data: allCatProducts } = await supabase
+      .from('retail_products')
+      .select('categories(name)')
+      .eq('retail_brand_id', retailerId)
+      .eq('status', 'active')
+      .eq('is_exchangeable', true)
+      .gt('stock_quantity', 0)
+      .is('deleted_at', null);
+
+    const categories = [...new Set(
+      (allCatProducts || [])
+        .map((p: any) => p.categories?.name)
+        .filter((c: string | null | undefined): c is string => !!c)
+    )].sort();
+
+    // Build paginated query
+    let query = supabase
       .from('retail_products')
       .select(`
         id,
@@ -796,12 +815,50 @@ export class ExchangesService {
         stock_quantity,
         categories(name),
         retail_product_images(image_url, is_primary)
-      `)
+      `, { count: 'exact' })
       .eq('retail_brand_id', retailerId)
       .eq('status', 'active')
       .eq('is_exchangeable', true)
       .gt('stock_quantity', 0)
       .is('deleted_at', null);
+
+    // Search filter
+    if (filters?.search && filters.search.trim()) {
+      query = query.ilike('name', `%${filters.search.trim()}%`);
+    }
+
+    // Category filter
+    if (filters?.category && filters.category.trim()) {
+      query = query.eq('categories.name', filters.category);
+    }
+
+    // Price range filter
+    if (filters?.priceRange) {
+      const [min, max] = filters.priceRange.split('-').map(Number);
+      if (min >= 0) query = query.gte('retail_price', min);
+      if (max > 0) query = query.lte('retail_price', max);
+    }
+
+    // Sort
+    switch (filters?.sortBy) {
+      case 'price_asc':
+        query = query.order('retail_price', { ascending: true });
+        break;
+      case 'price_desc':
+        query = query.order('retail_price', { ascending: false });
+        break;
+      case 'name_desc':
+        query = query.order('name', { ascending: false });
+        break;
+      default:
+        query = query.order('name', { ascending: true });
+        break;
+    }
+
+    // Pagination
+    query = query.range(offset, offset + limit - 1);
+
+    const { data: products, error, count } = await query;
 
     if (error) {
       throw new BadRequestException('Failed to fetch retailer products');
@@ -809,16 +866,15 @@ export class ExchangesService {
 
     // Transform to match expected format
     const transformedProducts = (products || []).map(product => {
-      // Sort images by is_primary (primary first) and extract URLs
       const sortedImages = (product.retail_product_images || [])
         .sort((a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0))
         .map((img: any) => img.image_url);
-      
+
       return {
         id: product.id,
         name: product.name,
         slug: product.slug,
-        wholesale_price: product.retail_price, // Map retail_price to wholesale_price for compatibility
+        wholesale_price: product.retail_price,
         sku: product.sku,
         stock_quantity: product.stock_quantity,
         category: (product as any).categories?.name || '',
@@ -826,7 +882,17 @@ export class ExchangesService {
       };
     });
 
-    return transformedProducts;
+    return {
+      products: transformedProducts,
+      categories,
+      brandName: retailBrand.display_name || retailBrand.brand_name || '',
+      pagination: {
+        total: count || 0,
+        page,
+        limit,
+        totalPages: Math.ceil((count || 0) / limit),
+      },
+    };
   }
 
   // Get initiator's products for receiver to browse during approval (with filters)
@@ -1008,5 +1074,129 @@ export class ExchangesService {
     );
 
     return retailers.filter((r: any) => brandsWithExchangeable.has(r.id));
+  }
+
+  // Get ALL exchangeable products from ALL brands (excluding current user's)
+  async getAllExchangeableProducts(
+    userId: string,
+    filters?: { search?: string; category?: string; sortBy?: string; priceRange?: string; page?: number; limit?: number },
+  ) {
+    const supabase = this.supabaseService.getServiceClient();
+    const page = filters?.page || 1;
+    const limit = filters?.limit || 24;
+    const offset = (page - 1) * limit;
+
+    // Get current user's brand to exclude their products
+    const { data: myBrand } = await supabase
+      .from('retail_brands')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('status', 'approved')
+      .single();
+
+    // Build query for all exchangeable products
+    let query = supabase
+      .from('retail_products')
+      .select(`
+        id,
+        name,
+        slug,
+        retail_price,
+        sku,
+        stock_quantity,
+        retail_brand_id,
+        categories(name),
+        retail_product_images(image_url, is_primary),
+        retail_brands(id, user_id, brand_name, display_name, logo_url)
+      `, { count: 'exact' })
+      .eq('status', 'active')
+      .eq('is_exchangeable', true)
+      .gt('stock_quantity', 0)
+      .is('deleted_at', null);
+
+    // Exclude own brand's products
+    if (myBrand) {
+      query = query.neq('retail_brand_id', myBrand.id);
+    }
+
+    // Search filter
+    if (filters?.search && filters.search.trim()) {
+      query = query.ilike('name', `%${filters.search.trim()}%`);
+    }
+
+    // Category filter
+    if (filters?.category && filters.category.trim()) {
+      // We need to filter by category name from the joined table
+      // Supabase allows filtering on foreign table columns
+      query = query.eq('categories.name', filters.category);
+    }
+
+    // Price range filter
+    if (filters?.priceRange) {
+      const [min, max] = filters.priceRange.split('-').map(Number);
+      if (min >= 0) query = query.gte('retail_price', min);
+      if (max > 0) query = query.lte('retail_price', max);
+    }
+
+    // Sort
+    switch (filters?.sortBy) {
+      case 'price_asc':
+        query = query.order('retail_price', { ascending: true });
+        break;
+      case 'price_desc':
+        query = query.order('retail_price', { ascending: false });
+        break;
+      case 'name_desc':
+        query = query.order('name', { ascending: false });
+        break;
+      default:
+        query = query.order('name', { ascending: true });
+        break;
+    }
+
+    // Pagination
+    query = query.range(offset, offset + limit - 1);
+
+    const { data: products, error, count } = await query;
+
+    if (error) {
+      console.error('Error fetching all exchangeable products:', error);
+      throw new BadRequestException('Failed to fetch exchangeable products');
+    }
+
+    // Transform
+    const transformedProducts = (products || []).map((product: any) => {
+      const sortedImages = (product.retail_product_images || [])
+        .sort((a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0))
+        .map((img: any) => img.image_url);
+
+      return {
+        id: product.id,
+        name: product.name,
+        slug: product.slug,
+        wholesale_price: product.retail_price,
+        sku: product.sku,
+        stock_quantity: product.stock_quantity,
+        category: product.categories?.name || '',
+        images: sortedImages,
+        brand: {
+          id: product.retail_brands?.id || product.retail_brand_id,
+          brand_name: product.retail_brands?.brand_name || '',
+          display_name: product.retail_brands?.display_name || '',
+          logo_url: product.retail_brands?.logo_url || '',
+          user_id: product.retail_brands?.user_id || '',
+        },
+      };
+    });
+
+    return {
+      products: transformedProducts,
+      pagination: {
+        total: count || 0,
+        page,
+        limit,
+        totalPages: Math.ceil((count || 0) / limit),
+      },
+    };
   }
 }
