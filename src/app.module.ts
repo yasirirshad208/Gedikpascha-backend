@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { SupabaseModule } from './supabase/supabase.module';
@@ -16,10 +17,18 @@ import { RetailOrdersModule } from './retail/orders/orders.module';
 import { RetailModule } from './retail/retail.module';
 import { AdminModule } from './admin/admin.module';
 import { PublicCategoriesModule } from './public/categories/categories.module';
+import { AdminOnlyGuard } from './admin/guards/admin-only.guard';
+import { SocialModule } from './social/social.module';
 
 @Module({
-  imports: [SupabaseModule, AuthModule, BrandsModule, ProductsModule, CartModule, OrdersModule, FavouritesModule, ReviewsModule, RetailBrandsModule, RetailProductsModule, RetailCartModule, RetailOrdersModule, RetailModule, AdminModule, PublicCategoriesModule],
+  imports: [SupabaseModule, AuthModule, BrandsModule, ProductsModule, CartModule, OrdersModule, FavouritesModule, ReviewsModule, RetailBrandsModule, RetailProductsModule, RetailCartModule, RetailOrdersModule, RetailModule, AdminModule, PublicCategoriesModule, SocialModule],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_GUARD,
+      useClass: AdminOnlyGuard,
+    },
+  ],
 })
 export class AppModule {}
