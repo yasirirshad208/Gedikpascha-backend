@@ -1,4 +1,8 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  BadRequestException,
+} from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { LoginDto } from './dto/login.dto';
 import { SignupDto } from './dto/signup.dto';
@@ -23,23 +27,23 @@ export class AuthService {
     });
 
     if (error) {
-      throw new BadRequestException(error.message || 'Failed to create account');
+      throw new BadRequestException(
+        error.message || 'Failed to create account',
+      );
     }
 
     // If user was created successfully, insert into users table
     if (data.user?.id) {
       try {
-        const { error: userError } = await supabase
-          .from('users')
-          .insert({
-            id: data.user.id,
-            full_name: signupDto.fullName,
-            email: signupDto.email,
-            is_email_verified: data.user.email_confirmed_at ? true : false,
-            email_verified_at: data.user.email_confirmed_at || null,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          });
+        const { error: userError } = await supabase.from('users').insert({
+          id: data.user.id,
+          full_name: signupDto.fullName,
+          email: signupDto.email,
+          is_email_verified: data.user.email_confirmed_at ? true : false,
+          email_verified_at: data.user.email_confirmed_at || null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
 
         if (userError) {
           // Don't fail signup if users table insert fails
@@ -53,7 +57,8 @@ export class AuthService {
     return {
       user: data.user,
       session: data.session,
-      message: 'Account created successfully. Please check your email to verify your account.',
+      message:
+        'Account created successfully. Please check your email to verify your account.',
     };
   }
 
@@ -70,7 +75,9 @@ export class AuthService {
     });
 
     if (error) {
-      throw new UnauthorizedException(error.message || 'Invalid email or password');
+      throw new UnauthorizedException(
+        error.message || 'Invalid email or password',
+      );
     }
 
     // Update last_login_at in users table
@@ -89,12 +96,14 @@ export class AuthService {
     }
 
     // Fetch user with role information from database
-    let userWithRole = data.user;
+    const userWithRole = data.user;
     if (data.user?.id) {
       // Check if user has admin role in user_metadata or from a profiles table
       // For now, we'll check user_metadata. In production, you'd query a profiles table
-      const isAdmin = data.user.user_metadata?.role === 'admin' || data.user.user_metadata?.isAdmin === true;
-      
+      const isAdmin =
+        data.user.user_metadata?.role === 'admin' ||
+        data.user.user_metadata?.isAdmin === true;
+
       // Add role info to user metadata if not already present
       if (!userWithRole.user_metadata) {
         userWithRole.user_metadata = {};
@@ -113,16 +122,22 @@ export class AuthService {
   async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {
     const supabase = this.supabaseService.getClient();
 
-    const { error } = await supabase.auth.resetPasswordForEmail(forgotPasswordDto.email, {
-      redirectTo: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/reset-password`,
-    });
+    const { error } = await supabase.auth.resetPasswordForEmail(
+      forgotPasswordDto.email,
+      {
+        redirectTo: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/reset-password`,
+      },
+    );
 
     if (error) {
-      throw new BadRequestException(error.message || 'Failed to send password reset email');
+      throw new BadRequestException(
+        error.message || 'Failed to send password reset email',
+      );
     }
 
     return {
-      message: 'Password reset email sent successfully. Please check your email.',
+      message:
+        'Password reset email sent successfully. Please check your email.',
     };
   }
 
@@ -140,7 +155,8 @@ export class AuthService {
 
         if (sessionError) {
           throw new BadRequestException(
-            sessionError.message || 'Invalid or expired reset token. Please request a new password reset.'
+            sessionError.message ||
+              'Invalid or expired reset token. Please request a new password reset.',
           );
         }
       }
@@ -151,7 +167,9 @@ export class AuthService {
       });
 
       if (error) {
-        throw new BadRequestException(error.message || 'Failed to reset password');
+        throw new BadRequestException(
+          error.message || 'Failed to reset password',
+        );
       }
 
       return {
@@ -165,7 +183,9 @@ export class AuthService {
     });
 
     if (error) {
-      throw new BadRequestException(error.message || 'Failed to reset password');
+      throw new BadRequestException(
+        error.message || 'Failed to reset password',
+      );
     }
 
     return {
@@ -185,7 +205,9 @@ export class AuthService {
     });
 
     if (error) {
-      throw new BadRequestException(error.message || `Failed to initiate ${provider} login`);
+      throw new BadRequestException(
+        error.message || `Failed to initiate ${provider} login`,
+      );
     }
 
     return {
@@ -203,11 +225,13 @@ export class AuthService {
     }
 
     // Fetch user with role information
-    let userWithRole = data.user;
+    const userWithRole = data.user;
     if (data.user?.id) {
       // Check if user has admin role
-      const isAdmin = data.user.user_metadata?.role === 'admin' || data.user.user_metadata?.isAdmin === true;
-      
+      const isAdmin =
+        data.user.user_metadata?.role === 'admin' ||
+        data.user.user_metadata?.isAdmin === true;
+
       // Ensure user_metadata exists and include role info
       if (!userWithRole.user_metadata) {
         userWithRole.user_metadata = {};
@@ -228,7 +252,9 @@ export class AuthService {
     });
 
     if (error || !data.session) {
-      throw new UnauthorizedException(error?.message || 'Failed to refresh token');
+      throw new UnauthorizedException(
+        error?.message || 'Failed to refresh token',
+      );
     }
 
     return {
@@ -239,4 +265,3 @@ export class AuthService {
     };
   }
 }
-

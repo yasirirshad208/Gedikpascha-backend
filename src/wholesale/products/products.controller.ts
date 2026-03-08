@@ -52,21 +52,26 @@ export class ProductsController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UsePipes(new ValidationPipe({ 
-    transform: true, 
-    whitelist: true,
-    forbidNonWhitelisted: false,
-    transformOptions: {
-      enableImplicitConversion: true, // Auto convert string to number, etc.
-    },
-  }))
+  @UsePipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: false,
+      transformOptions: {
+        enableImplicitConversion: true, // Auto convert string to number, etc.
+      },
+    }),
+  )
   async createProduct(
     @Body() createProductDto: CreateProductDto,
     @Headers('authorization') authHeader?: string,
   ) {
     try {
       const user = await this.getUserFromToken(authHeader);
-      return await this.productsService.createProduct(createProductDto, user.id);
+      return await this.productsService.createProduct(
+        createProductDto,
+        user.id,
+      );
     } catch (error) {
       console.error('Error in createProduct controller:', error);
       throw error; // Re-throw to let NestJS handle it
@@ -83,7 +88,14 @@ export class ProductsController {
     @Query('status') status?: string,
   ) {
     const user = await this.getUserFromToken(authHeader);
-    return this.productsService.getMyProducts(user.id, page, limit, search, categoryId, status);
+    return this.productsService.getMyProducts(
+      user.id,
+      page,
+      limit,
+      search,
+      categoryId,
+      status,
+    );
   }
 
   // Public endpoints (no auth required)
@@ -123,7 +135,7 @@ export class ProductsController {
   async getCategories() {
     // Public endpoint - no auth required
     const serviceClient = this.supabaseService.getServiceClient();
-    
+
     const { data, error } = await serviceClient
       .from('categories')
       .select('id, name, slug')
@@ -132,7 +144,9 @@ export class ProductsController {
       .order('name', { ascending: true });
 
     if (error) {
-      throw new BadRequestException(`Failed to fetch categories: ${error.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to fetch categories: ${error.message || 'Unknown error'}`,
+      );
     }
 
     return (data || []).map((cat: any) => ({
@@ -143,12 +157,10 @@ export class ProductsController {
   }
 
   @Get('subcategories')
-  async getSubcategories(
-    @Query('categoryId') categoryId?: string,
-  ) {
+  async getSubcategories(@Query('categoryId') categoryId?: string) {
     // Public endpoint - no auth required
     const serviceClient = this.supabaseService.getServiceClient();
-    
+
     let query = serviceClient
       .from('subcategories')
       .select('id, name, slug, category_id')
@@ -163,7 +175,9 @@ export class ProductsController {
     const { data, error } = await query;
 
     if (error) {
-      throw new BadRequestException(`Failed to fetch subcategories: ${error.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to fetch subcategories: ${error.message || 'Unknown error'}`,
+      );
     }
 
     return (data || []).map((sub: any) => ({
@@ -175,13 +189,11 @@ export class ProductsController {
   }
 
   @Get('category-filters')
-  async getCategoryFilters(
-    @Query('categoryId') categoryId?: string,
-  ) {
+  async getCategoryFilters(@Query('categoryId') categoryId?: string) {
     // Public endpoint - no auth required
     // Returns filter configuration for a specific category
     const serviceClient = this.supabaseService.getServiceClient();
-    
+
     if (!categoryId || categoryId === 'all') {
       return [];
     }
@@ -213,7 +225,7 @@ export class ProductsController {
   async getBrands() {
     // Public endpoint - returns all approved brands for filtering
     const serviceClient = this.supabaseService.getServiceClient();
-    
+
     const { data, error } = await serviceClient
       .from('wholesale_brands')
       .select('id, brand_name, display_name, logo_url')
@@ -221,7 +233,9 @@ export class ProductsController {
       .order('display_name', { ascending: true });
 
     if (error) {
-      throw new BadRequestException(`Failed to fetch brands: ${error.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to fetch brands: ${error.message || 'Unknown error'}`,
+      );
     }
 
     return (data || []).map((brand: any) => ({
@@ -286,19 +300,28 @@ export class ProductsController {
     const priceMaxNum = priceMax ? parseFloat(priceMax) : undefined;
     const minOrderNum = minOrder ? parseInt(minOrder, 10) : undefined;
     const ratingNum = rating ? parseFloat(rating) : undefined;
-    const inStockBool = inStock === 'true' ? true : inStock === 'false' ? false : undefined;
+    const inStockBool =
+      inStock === 'true' ? true : inStock === 'false' ? false : undefined;
     const freeShippingBool = freeShipping === 'true' ? true : undefined;
-    
+
     // Parse comma-separated arrays
-    const brandIdArray = brandIds ? brandIds.split(',').filter(Boolean) : undefined;
+    const brandIdArray = brandIds
+      ? brandIds.split(',').filter(Boolean)
+      : undefined;
     const colorArray = colors ? colors.split(',').filter(Boolean) : undefined;
     const sizeArray = sizes ? sizes.split(',').filter(Boolean) : undefined;
-    const materialArray = materials ? materials.split(',').filter(Boolean) : undefined;
+    const materialArray = materials
+      ? materials.split(',').filter(Boolean)
+      : undefined;
     const genderArray = gender ? gender.split(',').filter(Boolean) : undefined;
-    const productTypeArray = productType ? productType.split(',').filter(Boolean) : undefined;
+    const productTypeArray = productType
+      ? productType.split(',').filter(Boolean)
+      : undefined;
     const styleArray = style ? style.split(',').filter(Boolean) : undefined;
-    const featuresArray = features ? features.split(',').filter(Boolean) : undefined;
-    
+    const featuresArray = features
+      ? features.split(',').filter(Boolean)
+      : undefined;
+
     // Parse dynamic filters JSON
     let parsedDynamicFilters: Record<string, string[]> | undefined;
     if (dynamicFilters) {
@@ -308,15 +331,15 @@ export class ProductsController {
         console.error('Failed to parse dynamic filters:', e);
       }
     }
-    
+
     return this.productsService.getAllProducts(
-      page, 
-      limit, 
-      search, 
+      page,
+      limit,
+      search,
       categoryId,
       categorySlug,
       subcategoryId,
-      sortBy, 
+      sortBy,
       filter,
       priceMinNum,
       priceMaxNum,
@@ -345,7 +368,11 @@ export class ProductsController {
     @Headers('authorization') authHeader?: string,
   ) {
     const user = await this.getUserFromToken(authHeader);
-    return this.productsService.updateProduct(productId, updateProductDto, user.id);
+    return this.productsService.updateProduct(
+      productId,
+      updateProductDto,
+      user.id,
+    );
   }
 
   @Delete(':id')
@@ -360,19 +387,24 @@ export class ProductsController {
 
   @Post(':id/upload-image')
   @HttpCode(HttpStatus.OK)
-  @UseInterceptors(FileInterceptor('image', {
-    limits: {
-      fileSize: 50 * 1024 * 1024, // 50MB limit
-    },
-  }))
+  @UseInterceptors(
+    FileInterceptor('image', {
+      limits: {
+        fileSize: 50 * 1024 * 1024, // 50MB limit
+      },
+    }),
+  )
   async uploadProductImage(
     @Param('id') productId: string,
     @UploadedFile() file: Express.Multer.File | undefined,
     @Headers('authorization') authHeader?: string,
-    @Query('displayOrder', new DefaultValuePipe(0), ParseIntPipe) displayOrder: number = 0,
+    @Query('displayOrder', new DefaultValuePipe(0), ParseIntPipe)
+    displayOrder: number = 0,
   ) {
     if (!file) {
-      throw new BadRequestException('No file provided. Please select an image file.');
+      throw new BadRequestException(
+        'No file provided. Please select an image file.',
+      );
     }
 
     const user = await this.getUserFromToken(authHeader);
@@ -381,10 +413,15 @@ export class ProductsController {
     try {
       await this.productsService.getProductById(productId, user.id);
     } catch (error) {
-      if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
+      if (
+        error instanceof UnauthorizedException ||
+        error instanceof BadRequestException
+      ) {
         throw error;
       }
-      throw new BadRequestException('Product not found or you do not have permission.');
+      throw new BadRequestException(
+        'Product not found or you do not have permission.',
+      );
     }
 
     const imageUrl = await this.productsUploadService.uploadImage(
@@ -424,4 +461,3 @@ export class ProductsController {
     };
   }
 }
-

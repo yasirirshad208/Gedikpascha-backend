@@ -6,5 +6,3 @@ import { CategoriesModule } from './categories/categories.module';
   exports: [CategoriesModule],
 })
 export class AdminModule {}
-
-

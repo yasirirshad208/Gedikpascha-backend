@@ -48,7 +48,9 @@ export class ProductsUploadService {
         });
 
       if (error) {
-        throw new BadRequestException(`Failed to upload image: ${error.message}`);
+        throw new BadRequestException(
+          `Failed to upload image: ${error.message}`,
+        );
       }
 
       // Get public URL
@@ -62,8 +64,13 @@ export class ProductsUploadService {
         throw error;
       }
       // If sharp conversion fails, try to upload original
-      console.error('WebP conversion failed, attempting original upload:', error);
-      throw new BadRequestException(`Failed to process image: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error(
+        'WebP conversion failed, attempting original upload:',
+        error,
+      );
+      throw new BadRequestException(
+        `Failed to process image: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
     }
   }
 
@@ -117,4 +124,3 @@ export class ProductsUploadService {
     }
   }
 }
-

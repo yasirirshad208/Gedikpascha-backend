@@ -11,11 +11,7 @@ import {
 } from '@nestjs/common';
 import { CartService } from './cart.service';
 import { SupabaseService } from '../../supabase/supabase.service';
-import {
-  AddToCartDto,
-  UpdateCartItemDto,
-  SyncCartDto,
-} from './dto/cart.dto';
+import { AddToCartDto, UpdateCartItemDto, SyncCartDto } from './dto/cart.dto';
 
 @Controller('retail/cart')
 export class CartController {

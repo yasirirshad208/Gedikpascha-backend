@@ -23,13 +23,14 @@ export class RetailProductsController {
   constructor(
     private readonly productsService: RetailProductsService,
     private readonly supabaseService: SupabaseService,
-  ) { }
+  ) {}
 
   @Get()
   async getPublicProducts(
     @Query('brandId') brandId?: string,
     @Query('sortBy') sortBy?: 'price_asc' | 'price_desc' | 'newest' | 'popular',
-    @Query('priceRange') priceRange?: 'under_50' | '50_100' | '100_200' | 'over_200',
+    @Query('priceRange')
+    priceRange?: 'under_50' | '50_100' | '100_200' | 'over_200',
     @Query('search') search?: string,
     @Query('filter') filter?: 'all' | 'sale' | 'best-products' | 'recent',
     @Query('category') category?: string,
@@ -91,7 +92,13 @@ export class RetailProductsController {
       throw new UnauthorizedException('Invalid or expired token');
     }
 
-    return this.productsService.getMyProducts(userData.user.id, status, search, page, limit);
+    return this.productsService.getMyProducts(
+      userData.user.id,
+      status,
+      search,
+      page,
+      limit,
+    );
   }
 
   @Get('my-products/:id')
@@ -123,15 +130,20 @@ export class RetailProductsController {
     if (!token) throw new UnauthorizedException('Authentication required');
     const supabase = this.supabaseService.getClient();
     const { data: userData, error } = await supabase.auth.getUser(token);
-    if (error || !userData.user) throw new UnauthorizedException('Invalid or expired token');
-    return this.productsService.getProductInventory(productId, userData.user.id);
+    if (error || !userData.user)
+      throw new UnauthorizedException('Invalid or expired token');
+    return this.productsService.getProductInventory(
+      productId,
+      userData.user.id,
+    );
   }
 
   @Put('my-products/:id')
   async updateProduct(
     @Param('id') productId: string,
     @Headers('authorization') authHeader: string,
-    @Body() updateData: {
+    @Body()
+    updateData: {
       name?: string;
       description?: string;
       shortDescription?: string;
@@ -166,13 +178,15 @@ export class RetailProductsController {
   async updateProductInventoryPreserved(
     @Param('id') productId: string,
     @Headers('authorization') authHeader: string,
-    @Body() body: { updates: { combinationKey: string; preservedQuantity: number }[] },
+    @Body()
+    body: { updates: { combinationKey: string; preservedQuantity: number }[] },
   ) {
     const token = authHeader?.replace('Bearer ', '');
     if (!token) throw new UnauthorizedException('Authentication required');
     const supabase = this.supabaseService.getClient();
     const { data: userData, error } = await supabase.auth.getUser(token);
-    if (error || !userData.user) throw new UnauthorizedException('Invalid or expired token');
+    if (error || !userData.user)
+      throw new UnauthorizedException('Invalid or expired token');
     return this.productsService.updateInventoryPreservedQuantities(
       productId,
       userData.user.id,
@@ -189,7 +203,8 @@ export class RetailProductsController {
     if (!token) throw new UnauthorizedException('Authentication required');
     const supabase = this.supabaseService.getClient();
     const { data: userData, error } = await supabase.auth.getUser(token);
-    if (error || !userData.user) throw new UnauthorizedException('Invalid or expired token');
+    if (error || !userData.user)
+      throw new UnauthorizedException('Invalid or expired token');
     return this.productsService.setAllExchangeable(
       userData.user.id,
       body.isExchangeable,
@@ -206,7 +221,8 @@ export class RetailProductsController {
     if (!token) throw new UnauthorizedException('Authentication required');
     const supabase = this.supabaseService.getClient();
     const { data: userData, error } = await supabase.auth.getUser(token);
-    if (error || !userData.user) throw new UnauthorizedException('Invalid or expired token');
+    if (error || !userData.user)
+      throw new UnauthorizedException('Invalid or expired token');
     return this.productsService.toggleExchangeable(
       productId,
       userData.user.id,

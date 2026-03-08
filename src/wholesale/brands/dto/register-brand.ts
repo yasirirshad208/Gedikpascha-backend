@@ -1,4 +1,12 @@
-import { IsNotEmpty, IsEmail, IsOptional, IsString, MinLength, MaxLength, Matches } from 'class-validator';
+import {
+  IsNotEmpty,
+  IsEmail,
+  IsOptional,
+  IsString,
+  MinLength,
+  MaxLength,
+  Matches,
+} from 'class-validator';
 
 export class RegisterBrandDto {
   @IsNotEmpty({ message: 'Brand name is required' })
@@ -6,7 +14,8 @@ export class RegisterBrandDto {
   @MinLength(2, { message: 'Brand name must be at least 2 characters' })
   @MaxLength(100, { message: 'Brand name must be less than 100 characters' })
   @Matches(/^[a-z0-9_-]+$/, {
-    message: 'Brand name can only contain lowercase letters, numbers, hyphens, and underscores. No spaces allowed.',
+    message:
+      'Brand name can only contain lowercase letters, numbers, hyphens, and underscores. No spaces allowed.',
   })
   brandName: string;
 
@@ -49,4 +58,3 @@ export class RegisterBrandDto {
   @IsString()
   category?: string;
 }
-

@@ -1,4 +1,9 @@
-import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
 
 interface CreateReviewDto {
@@ -61,14 +66,16 @@ export class ReviewsService {
     // Check if user has purchased this product (for verified purchase badge)
     const { data: orderItem } = await serviceClient
       .from('wholesale_order_items')
-      .select(`
+      .select(
+        `
         id,
         order:wholesale_orders!inner (
           id,
           user_id,
           status
         )
-      `)
+      `,
+      )
       .eq('product_id', dto.productId)
       .eq('order.user_id', userId)
       .in('order.status', ['completed', 'delivered'])
@@ -98,7 +105,9 @@ export class ReviewsService {
       if (error.code === '23505') {
         throw new ConflictException('You have already reviewed this product');
       }
-      throw new BadRequestException(`Failed to create review: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to create review: ${error.message}`,
+      );
     }
 
     // Get user info for response
@@ -141,7 +150,9 @@ export class ReviewsService {
       .eq('is_approved', true);
 
     if (countError) {
-      throw new BadRequestException(`Failed to count reviews: ${countError.message}`);
+      throw new BadRequestException(
+        `Failed to count reviews: ${countError.message}`,
+      );
     }
 
     // Get reviews
@@ -154,12 +165,14 @@ export class ReviewsService {
       .range(offset, offset + limit - 1);
 
     if (error) {
-      throw new BadRequestException(`Failed to fetch reviews: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to fetch reviews: ${error.message}`,
+      );
     }
 
     // Get user info for reviews
     const userIds = [...new Set((reviews || []).map((r: any) => r.user_id))];
-    let usersMap = new Map<string, any>();
+    const usersMap = new Map<string, any>();
 
     if (userIds.length > 0) {
       const { data: users } = await serviceClient
@@ -187,7 +200,9 @@ export class ReviewsService {
       totalRating += r.rating;
     });
 
-    const averageRating = ratingStats?.length ? totalRating / ratingStats.length : 0;
+    const averageRating = ratingStats?.length
+      ? totalRating / ratingStats.length
+      : 0;
 
     // Format reviews
     const formattedReviews = (reviews || []).map((review: any) => {
@@ -300,8 +315,10 @@ export class ReviewsService {
     if (dto.rating !== undefined) updateData.rating = dto.rating;
     if (dto.title !== undefined) updateData.title = dto.title;
     if (dto.comment !== undefined) updateData.comment = dto.comment;
-    if (dto.qualityRating !== undefined) updateData.quality_rating = dto.qualityRating;
-    if (dto.valueRating !== undefined) updateData.value_rating = dto.valueRating;
+    if (dto.qualityRating !== undefined)
+      updateData.quality_rating = dto.qualityRating;
+    if (dto.valueRating !== undefined)
+      updateData.value_rating = dto.valueRating;
 
     const { data: review, error } = await serviceClient
       .from('wholesale_product_reviews')
@@ -311,7 +328,9 @@ export class ReviewsService {
       .single();
 
     if (error) {
-      throw new BadRequestException(`Failed to update review: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to update review: ${error.message}`,
+      );
     }
 
     return {
@@ -352,7 +371,9 @@ export class ReviewsService {
       .eq('id', reviewId);
 
     if (error) {
-      throw new BadRequestException(`Failed to delete review: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to delete review: ${error.message}`,
+      );
     }
 
     return { message: 'Review deleted successfully' };

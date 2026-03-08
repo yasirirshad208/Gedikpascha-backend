@@ -11,4 +11,3 @@ import { SupabaseModule } from '../../supabase/supabase.module';
   exports: [ProductsService],
 })
 export class ProductsModule {}
-

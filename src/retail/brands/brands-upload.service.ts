@@ -5,7 +5,11 @@ import { SupabaseService } from '../../supabase/supabase.service';
 export class RetailBrandsUploadService {
   constructor(private readonly supabaseService: SupabaseService) {}
 
-  async uploadImage(userId: string, file: Express.Multer.File, imageType: 'logo' | 'cover'): Promise<string> {
+  async uploadImage(
+    userId: string,
+    file: Express.Multer.File,
+    imageType: 'logo' | 'cover',
+  ): Promise<string> {
     if (!file) {
       throw new BadRequestException('No file provided');
     }

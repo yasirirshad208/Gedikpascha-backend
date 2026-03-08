@@ -14,11 +14,7 @@ import {
 } from '@nestjs/common';
 import { CartService } from './cart.service';
 import { SupabaseService } from '../../supabase/supabase.service';
-import {
-  AddToCartDto,
-  UpdateCartItemDto,
-  SyncCartDto,
-} from './dto/cart.dto';
+import { AddToCartDto, UpdateCartItemDto, SyncCartDto } from './dto/cart.dto';
 
 @Controller('wholesale/cart')
 export class CartController {
@@ -74,7 +70,11 @@ export class CartController {
     @Body() updateCartItemDto: UpdateCartItemDto,
   ) {
     const user = await this.getUserFromToken(authHeader);
-    return this.cartService.updateCartItem(user.id, cartItemId, updateCartItemDto);
+    return this.cartService.updateCartItem(
+      user.id,
+      cartItemId,
+      updateCartItemDto,
+    );
   }
 
   @Delete('item/:id')

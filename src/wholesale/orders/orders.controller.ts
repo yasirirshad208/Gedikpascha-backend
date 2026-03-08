@@ -161,7 +161,10 @@ export class OrdersController {
       throw new ForbiddenException('Your brand is not approved yet');
     }
 
-    return this.ordersService.getBrandAnalytics(brand.id, dateRange || 'last-30-days');
+    return this.ordersService.getBrandAnalytics(
+      brand.id,
+      dateRange || 'last-30-days',
+    );
   }
 
   // Get order by ID (for logged-in users)

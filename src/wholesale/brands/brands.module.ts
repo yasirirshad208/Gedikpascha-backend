@@ -12,5 +12,3 @@ import { AdminModule } from '../../admin/admin.module';
   exports: [BrandsService],
 })
 export class BrandsModule {}
-
-

@@ -74,7 +74,8 @@ export class OrdersService {
       customer_name: createOrderDto.customerName,
       customer_phone: createOrderDto.customerPhone || null,
       shipping_address_line1: createOrderDto.shippingAddress.addressLine1,
-      shipping_address_line2: createOrderDto.shippingAddress.addressLine2 || null,
+      shipping_address_line2:
+        createOrderDto.shippingAddress.addressLine2 || null,
       shipping_city: createOrderDto.shippingAddress.city,
       shipping_state: createOrderDto.shippingAddress.state || null,
       shipping_postal_code: createOrderDto.shippingAddress.postalCode,
@@ -95,13 +96,19 @@ export class OrdersService {
     };
 
     // Add billing address if different from shipping
-    if (!createOrderDto.billingSameAsShipping && createOrderDto.billingAddress) {
-      orderData.billing_address_line1 = createOrderDto.billingAddress.addressLine1;
-      orderData.billing_address_line2 = createOrderDto.billingAddress.addressLine2 || null;
+    if (
+      !createOrderDto.billingSameAsShipping &&
+      createOrderDto.billingAddress
+    ) {
+      orderData.billing_address_line1 =
+        createOrderDto.billingAddress.addressLine1;
+      orderData.billing_address_line2 =
+        createOrderDto.billingAddress.addressLine2 || null;
       orderData.billing_city = createOrderDto.billingAddress.city;
       orderData.billing_state = createOrderDto.billingAddress.state || null;
       orderData.billing_postal_code = createOrderDto.billingAddress.postalCode;
-      orderData.billing_country = createOrderDto.billingAddress.country || 'Turkey';
+      orderData.billing_country =
+        createOrderDto.billingAddress.country || 'Turkey';
     }
 
     // Insert order
@@ -271,7 +278,11 @@ export class OrdersService {
     const offset = (page - 1) * limit;
 
     // Get orders
-    const { data: orders, error, count } = await serviceClient
+    const {
+      data: orders,
+      error,
+      count,
+    } = await serviceClient
       .from('wholesale_orders')
       .select('*', { count: 'exact' })
       .eq('user_id', userId)
@@ -323,10 +334,7 @@ export class OrdersService {
     };
   }
 
-  async updateOrderStatus(
-    orderId: string,
-    updateDto: UpdateOrderStatusDto,
-  ) {
+  async updateOrderStatus(orderId: string, updateDto: UpdateOrderStatusDto) {
     const serviceClient = this.supabaseService.getServiceClient();
 
     const updateData: any = {
@@ -395,7 +403,9 @@ export class OrdersService {
       .single();
 
     if (error) {
-      throw new BadRequestException(`Failed to update payment: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to update payment: ${error.message}`,
+      );
     }
 
     return this.getOrderById(orderId);
@@ -444,7 +454,9 @@ export class OrdersService {
       throw new BadRequestException('Failed to fetch order items');
     }
 
-    const orderIds = [...new Set(orderItems?.map((item: any) => item.order_id) || [])];
+    const orderIds = [
+      ...new Set(orderItems?.map((item: any) => item.order_id) || []),
+    ];
 
     if (orderIds.length === 0) {
       return {
@@ -473,7 +485,7 @@ export class OrdersService {
     // Apply search filter (by order number or customer name/email)
     if (search) {
       ordersQuery = ordersQuery.or(
-        `order_number.ilike.%${search}%,customer_name.ilike.%${search}%,customer_email.ilike.%${search}%`
+        `order_number.ilike.%${search}%,customer_name.ilike.%${search}%,customer_email.ilike.%${search}%`,
       );
     }
 
@@ -577,7 +589,9 @@ export class OrdersService {
       .limit(1);
 
     if (checkError || !brandOrderItems || brandOrderItems.length === 0) {
-      throw new NotFoundException('Order not found or does not contain your products');
+      throw new NotFoundException(
+        'Order not found or does not contain your products',
+      );
     }
 
     // Get the order
@@ -675,11 +689,15 @@ export class OrdersService {
     switch (dateRange) {
       case 'last-7-days':
         startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        previousStartDate = new Date(startDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+        previousStartDate = new Date(
+          startDate.getTime() - 7 * 24 * 60 * 60 * 1000,
+        );
         break;
       case 'last-90-days':
         startDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
-        previousStartDate = new Date(startDate.getTime() - 90 * 24 * 60 * 60 * 1000);
+        previousStartDate = new Date(
+          startDate.getTime() - 90 * 24 * 60 * 60 * 1000,
+        );
         break;
       case 'this-month':
         startDate = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -692,7 +710,9 @@ export class OrdersService {
       case 'last-30-days':
       default:
         startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-        previousStartDate = new Date(startDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+        previousStartDate = new Date(
+          startDate.getTime() - 30 * 24 * 60 * 60 * 1000,
+        );
         break;
     }
 
@@ -704,7 +724,10 @@ export class OrdersService {
       .is('deleted_at', null);
 
     if (productsError) {
-      console.error('Error fetching brand products for analytics:', productsError);
+      console.error(
+        'Error fetching brand products for analytics:',
+        productsError,
+      );
       // Return empty analytics instead of throwing error
       return this.getEmptyAnalytics();
     }
@@ -718,7 +741,8 @@ export class OrdersService {
     // Get order items for current period
     const { data: currentItems, error: currentError } = await serviceClient
       .from('wholesale_order_items')
-      .select(`
+      .select(
+        `
         id,
         order_id,
         product_id,
@@ -728,7 +752,8 @@ export class OrdersService {
         item_total,
         pack_quantity,
         created_at
-      `)
+      `,
+      )
       .in('product_id', productIds)
       .gte('created_at', startDate.toISOString());
 
@@ -746,7 +771,9 @@ export class OrdersService {
       .lt('created_at', startDate.toISOString());
 
     // Calculate current period KPIs
-    const currentOrderIds = [...new Set(currentItems?.map((item: any) => item.order_id) || [])];
+    const currentOrderIds = [
+      ...new Set(currentItems?.map((item: any) => item.order_id) || []),
+    ];
     let currentRevenue = 0;
     let currentPacks = 0;
 
@@ -759,7 +786,9 @@ export class OrdersService {
     const currentAOV = currentOrders > 0 ? currentRevenue / currentOrders : 0;
 
     // Calculate previous period KPIs
-    const previousOrderIds = [...new Set(previousItems?.map((item: any) => item.order_id) || [])];
+    const previousOrderIds = [
+      ...new Set(previousItems?.map((item: any) => item.order_id) || []),
+    ];
     let previousRevenue = 0;
     let previousPacks = 0;
 
@@ -769,10 +798,20 @@ export class OrdersService {
     });
 
     const previousOrders = previousOrderIds.length;
-    const previousAOV = previousOrders > 0 ? previousRevenue / previousOrders : 0;
+    const previousAOV =
+      previousOrders > 0 ? previousRevenue / previousOrders : 0;
 
     // Calculate top products
-    const productStats: Record<string, { name: string; image: string; revenue: number; orders: Set<string>; packs: number }> = {};
+    const productStats: Record<
+      string,
+      {
+        name: string;
+        image: string;
+        revenue: number;
+        orders: Set<string>;
+        packs: number;
+      }
+    > = {};
 
     (currentItems || []).forEach((item: any) => {
       if (!productStats[item.product_id]) {
@@ -802,22 +841,36 @@ export class OrdersService {
       .slice(0, 5);
 
     // Get recent orders with brand's items
-    const recentOrderIds = [...new Set((currentItems || []).slice(0, 20).map((item: any) => item.order_id))].slice(0, 5);
+    const recentOrderIds = [
+      ...new Set(
+        (currentItems || []).slice(0, 20).map((item: any) => item.order_id),
+      ),
+    ].slice(0, 5);
 
     let recentOrders: any[] = [];
     if (recentOrderIds.length > 0) {
       const { data: orders } = await serviceClient
         .from('wholesale_orders')
-        .select('id, order_number, customer_name, status, created_at, total_amount')
+        .select(
+          'id, order_number, customer_name, status, created_at, total_amount',
+        )
         .in('id', recentOrderIds)
         .order('created_at', { ascending: false })
         .limit(5);
 
       // Get brand's revenue for each order
       recentOrders = (orders || []).map((order: any) => {
-        const orderItems = (currentItems || []).filter((item: any) => item.order_id === order.id);
-        const brandRevenue = orderItems.reduce((sum: number, item: any) => sum + parseFloat(item.item_total), 0);
-        const brandPacks = orderItems.reduce((sum: number, item: any) => sum + item.quantity, 0);
+        const orderItems = (currentItems || []).filter(
+          (item: any) => item.order_id === order.id,
+        );
+        const brandRevenue = orderItems.reduce(
+          (sum: number, item: any) => sum + parseFloat(item.item_total),
+          0,
+        );
+        const brandPacks = orderItems.reduce(
+          (sum: number, item: any) => sum + item.quantity,
+          0,
+        );
 
         return {
           id: order.id,

@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
 import {
   CreateExchangeDto,
@@ -9,7 +14,7 @@ import {
 
 @Injectable()
 export class ExchangesService {
-  constructor(private readonly supabaseService: SupabaseService) { }
+  constructor(private readonly supabaseService: SupabaseService) {}
 
   // Create a new exchange request
   async createExchange(userId: string, createExchangeDto: CreateExchangeDto) {
@@ -28,18 +33,26 @@ export class ExchangesService {
       .eq('status', 'approved');
 
     if (brandsError) {
-      throw new BadRequestException(`User verification failed: ${brandsError.message}`);
+      throw new BadRequestException(
+        `User verification failed: ${brandsError.message}`,
+      );
     }
 
     if (!retailBrands || retailBrands.length !== 2) {
-      throw new BadRequestException(`Both users must be approved retailers - found ${retailBrands?.length || 0} approved retail brands`);
+      throw new BadRequestException(
+        `Both users must be approved retailers - found ${retailBrands?.length || 0} approved retail brands`,
+      );
     }
 
     const initiatorBrand = retailBrands.find((b) => b.user_id === userId);
-    const receiverBrand = retailBrands.find((b) => b.user_id === createExchangeDto.receiverId);
+    const receiverBrand = retailBrands.find(
+      (b) => b.user_id === createExchangeDto.receiverId,
+    );
 
     if (!initiatorBrand || !receiverBrand) {
-      throw new ForbiddenException('Both users must have approved retail brands to create exchanges');
+      throw new ForbiddenException(
+        'Both users must have approved retail brands to create exchanges',
+      );
     }
 
     // Calculate total prices
@@ -77,7 +90,9 @@ export class ExchangesService {
       .single();
 
     if (exchangeError || !exchange) {
-      throw new BadRequestException(`Failed to create exchange: ${exchangeError?.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to create exchange: ${exchangeError?.message || 'Unknown error'}`,
+      );
     }
 
     // Insert initiator items (may be empty if offerAllProducts is true)
@@ -102,8 +117,13 @@ export class ExchangesService {
 
       if (initiatorItemsError) {
         // Rollback: delete the exchange
-        await supabase.from('retail_product_exchanges').delete().eq('id', exchange.id);
-        throw new BadRequestException(`Failed to add initiator items: ${initiatorItemsError.message}`);
+        await supabase
+          .from('retail_product_exchanges')
+          .delete()
+          .eq('id', exchange.id);
+        throw new BadRequestException(
+          `Failed to add initiator items: ${initiatorItemsError.message}`,
+        );
       }
     }
 
@@ -127,8 +147,13 @@ export class ExchangesService {
 
     if (receiverItemsError) {
       // Rollback: delete the exchange and initiator items
-      await supabase.from('retail_product_exchanges').delete().eq('id', exchange.id);
-      throw new BadRequestException(`Failed to add receiver items: ${receiverItemsError.message}`);
+      await supabase
+        .from('retail_product_exchanges')
+        .delete()
+        .eq('id', exchange.id);
+      throw new BadRequestException(
+        `Failed to add receiver items: ${receiverItemsError.message}`,
+      );
     }
 
     // Add timeline entry
@@ -159,7 +184,9 @@ export class ExchangesService {
 
     // Verify user is part of the exchange
     if (exchange.initiator_id !== userId && exchange.receiver_id !== userId) {
-      throw new ForbiddenException('You are not authorized to view this exchange');
+      throw new ForbiddenException(
+        'You are not authorized to view this exchange',
+      );
     }
 
     // Get exchange items
@@ -176,11 +203,17 @@ export class ExchangesService {
       .order('created_at', { ascending: false });
 
     // Get addresses - filter out null values
-    const addressIds = [exchange.initiator_address_id, exchange.receiver_address_id].filter(Boolean);
-    const { data: addresses } = addressIds.length > 0 ? await supabase
-      .from('retail_exchange_addresses')
-      .select('*')
-      .in('id', addressIds) : { data: [] };
+    const addressIds = [
+      exchange.initiator_address_id,
+      exchange.receiver_address_id,
+    ].filter(Boolean);
+    const { data: addresses } =
+      addressIds.length > 0
+        ? await supabase
+            .from('retail_exchange_addresses')
+            .select('*')
+            .in('id', addressIds)
+        : { data: [] };
 
     return {
       ...exchange,
@@ -191,7 +224,11 @@ export class ExchangesService {
   }
 
   // Get all exchanges for a user
-  async getExchanges(userId: string, role?: 'initiator' | 'receiver', status?: string) {
+  async getExchanges(
+    userId: string,
+    role?: 'initiator' | 'receiver',
+    status?: string,
+  ) {
     const supabase = this.supabaseService.getServiceClient();
 
     let query = supabase
@@ -222,18 +259,25 @@ export class ExchangesService {
     }
 
     // Transform the response to rename retail_exchange_items to items
-    return (exchanges || []).map(exchange => ({
+    return (exchanges || []).map((exchange) => ({
       ...exchange,
       items: exchange.retail_exchange_items || [],
     }));
   }
 
   // Approve exchange (receiver action)
-  async approveExchange(exchangeId: string, userId: string, receiverAddressId: string, selectedInitiatorItems?: any[]) {
+  async approveExchange(
+    exchangeId: string,
+    userId: string,
+    receiverAddressId: string,
+    selectedInitiatorItems?: any[],
+  ) {
     const exchange = await this.getExchangeById(exchangeId, userId);
 
     if (exchange.receiver_id !== userId) {
-      throw new ForbiddenException('Only the receiver can approve the exchange');
+      throw new ForbiddenException(
+        'Only the receiver can approve the exchange',
+      );
     }
 
     if (exchange.status !== 'pending') {
@@ -243,10 +287,20 @@ export class ExchangesService {
     const supabase = this.supabaseService.getServiceClient();
 
     // If offer_all_products is true, receiver must pick initiator items now
-    if (exchange.offer_all_products && selectedInitiatorItems && selectedInitiatorItems.length > 0) {
+    if (
+      exchange.offer_all_products &&
+      selectedInitiatorItems &&
+      selectedInitiatorItems.length > 0
+    ) {
       // Validate minimum exchange value
-      const selectedTotal = selectedInitiatorItems.reduce((sum: number, item: any) => sum + (item.totalPrice || 0), 0);
-      if (exchange.min_exchange_value > 0 && selectedTotal < exchange.min_exchange_value) {
+      const selectedTotal = selectedInitiatorItems.reduce(
+        (sum: number, item: any) => sum + (item.totalPrice || 0),
+        0,
+      );
+      if (
+        exchange.min_exchange_value > 0 &&
+        selectedTotal < exchange.min_exchange_value
+      ) {
         throw new BadRequestException(
           `Selected products must be worth at least ₺${exchange.min_exchange_value}. Current: ₺${selectedTotal.toFixed(2)}`,
         );
@@ -271,7 +325,9 @@ export class ExchangesService {
         .insert(initiatorItemsData);
 
       if (itemsError) {
-        throw new BadRequestException(`Failed to add selected items: ${itemsError.message}`);
+        throw new BadRequestException(
+          `Failed to add selected items: ${itemsError.message}`,
+        );
       }
 
       // Recalculate price difference
@@ -366,7 +422,9 @@ export class ExchangesService {
     const exchange = await this.getExchangeById(exchangeId, userId);
 
     if (exchange.initiator_id !== userId) {
-      throw new ForbiddenException('Only the initiator can cancel the exchange');
+      throw new ForbiddenException(
+        'Only the initiator can cancel the exchange',
+      );
     }
 
     if (exchange.status !== 'pending') {
@@ -407,7 +465,9 @@ export class ExchangesService {
     const exchange = await this.getExchangeById(exchangeId, userId);
 
     if (exchange.status !== 'approved' && exchange.status !== 'in_transit') {
-      throw new BadRequestException('Invalid exchange status for delivery update');
+      throw new BadRequestException(
+        'Invalid exchange status for delivery update',
+      );
     }
 
     const supabase = this.supabaseService.getClient();
@@ -428,7 +488,10 @@ export class ExchangesService {
     }
 
     // Update to in_transit if either party ships
-    if (updateDto.deliveryStatus === 'shipped' || updateDto.deliveryStatus === 'in_transit') {
+    if (
+      updateDto.deliveryStatus === 'shipped' ||
+      updateDto.deliveryStatus === 'in_transit'
+    ) {
       updateData.status = 'in_transit';
       if (!exchange.shipped_at) {
         updateData.shipped_at = new Date().toISOString();
@@ -519,17 +582,22 @@ export class ExchangesService {
 
     // Lock each item
     for (const item of items) {
-      const ownerId = item.side === 'initiator' ? exchange.initiator_id : exchange.receiver_id;
+      const ownerId =
+        item.side === 'initiator'
+          ? exchange.initiator_id
+          : exchange.receiver_id;
 
       // Create inventory hold
-      const { error: holdError } = await supabase.from('retail_inventory_holds').insert({
-        exchange_item_id: item.id,
-        user_id: ownerId,
-        product_id: item.product_id,
-        quantity_held: item.quantity,
-        hold_reason: 'exchange',
-        is_active: true,
-      });
+      const { error: holdError } = await supabase
+        .from('retail_inventory_holds')
+        .insert({
+          exchange_item_id: item.id,
+          user_id: ownerId,
+          product_id: item.product_id,
+          quantity_held: item.quantity,
+          hold_reason: 'exchange',
+          is_active: true,
+        });
 
       if (holdError) {
         console.error('Failed to create inventory hold:', holdError);
@@ -569,7 +637,10 @@ export class ExchangesService {
 
     // Release holds and add products
     for (const item of items) {
-      const receiverId = item.side === 'initiator' ? exchange.receiver_id : exchange.initiator_id;
+      const receiverId =
+        item.side === 'initiator'
+          ? exchange.receiver_id
+          : exchange.initiator_id;
 
       // Release inventory hold
       await supabase
@@ -656,7 +727,9 @@ export class ExchangesService {
 
     if (error) {
       console.error('Database error creating address:', error);
-      throw new BadRequestException(`Failed to create address: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to create address: ${error.message}`,
+      );
     }
 
     return address;
@@ -726,7 +799,8 @@ export class ExchangesService {
     // Fetch from retail_products table
     const { data: products, error } = await supabase
       .from('retail_products')
-      .select(`
+      .select(
+        `
         id,
         name,
         slug,
@@ -735,7 +809,8 @@ export class ExchangesService {
         stock_quantity,
         categories(name),
         retail_product_images(image_url, is_primary)
-      `)
+      `,
+      )
       .eq('retail_brand_id', retailBrand.id)
       .eq('status', 'active')
       .eq('is_exchangeable', true)
@@ -747,10 +822,12 @@ export class ExchangesService {
     }
 
     // Transform to match expected format
-    const transformedProducts = (products || []).map(product => {
+    const transformedProducts = (products || []).map((product) => {
       // Sort images by is_primary (primary first) and extract URLs
       const sortedImages = (product.retail_product_images || [])
-        .sort((a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0))
+        .sort(
+          (a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0),
+        )
         .map((img: any) => img.image_url);
 
       return {
@@ -769,7 +846,17 @@ export class ExchangesService {
   }
 
   // Get other retailer's products available for exchange
-  async getRetailerProducts(retailerId: string, filters?: { search?: string; category?: string; sortBy?: string; priceRange?: string; page?: number; limit?: number }) {
+  async getRetailerProducts(
+    retailerId: string,
+    filters?: {
+      search?: string;
+      category?: string;
+      sortBy?: string;
+      priceRange?: string;
+      page?: number;
+      limit?: number;
+    },
+  ) {
     const supabase = this.supabaseService.getServiceClient();
     const page = filters?.page || 1;
     const limit = filters?.limit || 24;
@@ -797,16 +884,19 @@ export class ExchangesService {
       .gt('stock_quantity', 0)
       .is('deleted_at', null);
 
-    const categories = [...new Set(
-      (allCatProducts || [])
-        .map((p: any) => p.categories?.name)
-        .filter((c: string | null | undefined): c is string => !!c)
-    )].sort();
+    const categories = [
+      ...new Set(
+        (allCatProducts || [])
+          .map((p: any) => p.categories?.name)
+          .filter((c: string | null | undefined): c is string => !!c),
+      ),
+    ].sort();
 
     // Build paginated query
     let query = supabase
       .from('retail_products')
-      .select(`
+      .select(
+        `
         id,
         name,
         slug,
@@ -815,7 +905,9 @@ export class ExchangesService {
         stock_quantity,
         categories(name),
         retail_product_images(image_url, is_primary)
-      `, { count: 'exact' })
+      `,
+        { count: 'exact' },
+      )
       .eq('retail_brand_id', retailerId)
       .eq('status', 'active')
       .eq('is_exchangeable', true)
@@ -865,9 +957,11 @@ export class ExchangesService {
     }
 
     // Transform to match expected format
-    const transformedProducts = (products || []).map(product => {
+    const transformedProducts = (products || []).map((product) => {
       const sortedImages = (product.retail_product_images || [])
-        .sort((a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0))
+        .sort(
+          (a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0),
+        )
         .map((img: any) => img.image_url);
 
       return {
@@ -899,7 +993,12 @@ export class ExchangesService {
   async getInitiatorProducts(
     exchangeId: string,
     userId: string,
-    filters: { search?: string; sortBy?: string; priceRange?: string; category?: string },
+    filters: {
+      search?: string;
+      sortBy?: string;
+      priceRange?: string;
+      category?: string;
+    },
   ) {
     const supabase = this.supabaseService.getServiceClient();
 
@@ -915,7 +1014,9 @@ export class ExchangesService {
     }
 
     if (exchange.receiver_id !== userId) {
-      throw new ForbiddenException('Only the receiver can browse initiator products');
+      throw new ForbiddenException(
+        'Only the receiver can browse initiator products',
+      );
     }
 
     // Get initiator's retail brand
@@ -939,12 +1040,17 @@ export class ExchangesService {
       .gt('stock_quantity', 0)
       .is('deleted_at', null);
 
-    const categories = [...new Set((catData || []).map((p: any) => p.categories?.name).filter(Boolean))];
+    const categories = [
+      ...new Set(
+        (catData || []).map((p: any) => p.categories?.name).filter(Boolean),
+      ),
+    ];
 
     // Build product query with filters
     let query = supabase
       .from('retail_products')
-      .select(`
+      .select(
+        `
         id,
         name,
         slug,
@@ -954,7 +1060,8 @@ export class ExchangesService {
         category_id,
         categories(name),
         retail_product_images(image_url, is_primary)
-      `)
+      `,
+      )
       .eq('retail_brand_id', retailBrand.id)
       .eq('status', 'active')
       .gt('stock_quantity', 0)
@@ -1003,7 +1110,9 @@ export class ExchangesService {
 
     const transformedProducts = (products || []).map((product: any) => {
       const sortedImages = (product.retail_product_images || [])
-        .sort((a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0))
+        .sort(
+          (a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0),
+        )
         .map((img: any) => img.image_url);
 
       return {
@@ -1025,12 +1134,18 @@ export class ExchangesService {
   async getRetailers(userId: string, search?: string) {
     const supabase = this.supabaseService.getServiceClient();
 
-    console.log('[getRetailers] Called with userId:', userId, 'search:', search);
+    console.log(
+      '[getRetailers] Called with userId:',
+      userId,
+      'search:',
+      search,
+    );
 
     // Query retail_brands table to get approved retail shops
     let query = supabase
       .from('retail_brands')
-      .select(`
+      .select(
+        `
         id,
         user_id,
         brand_name,
@@ -1038,13 +1153,16 @@ export class ExchangesService {
         logo_url,
         description,
         status
-      `)
+      `,
+      )
       .eq('status', 'approved')
       .neq('user_id', userId); // Exclude self
 
     if (search && search.trim()) {
       const searchTerm = `%${search.trim()}%`;
-      query = query.or(`brand_name.ilike.${searchTerm},display_name.ilike.${searchTerm}`);
+      query = query.or(
+        `brand_name.ilike.${searchTerm},display_name.ilike.${searchTerm}`,
+      );
     }
 
     const { data: retailers, error } = await query.limit(50);
@@ -1070,7 +1188,7 @@ export class ExchangesService {
       .is('deleted_at', null);
 
     const brandsWithExchangeable = new Set(
-      (exchangeableCounts || []).map((p: any) => p.retail_brand_id)
+      (exchangeableCounts || []).map((p: any) => p.retail_brand_id),
     );
 
     return retailers.filter((r: any) => brandsWithExchangeable.has(r.id));
@@ -1079,7 +1197,14 @@ export class ExchangesService {
   // Get ALL exchangeable products from ALL brands (excluding current user's)
   async getAllExchangeableProducts(
     userId: string,
-    filters?: { search?: string; category?: string; sortBy?: string; priceRange?: string; page?: number; limit?: number },
+    filters?: {
+      search?: string;
+      category?: string;
+      sortBy?: string;
+      priceRange?: string;
+      page?: number;
+      limit?: number;
+    },
   ) {
     const supabase = this.supabaseService.getServiceClient();
     const page = filters?.page || 1;
@@ -1097,7 +1222,8 @@ export class ExchangesService {
     // Build query for all exchangeable products
     let query = supabase
       .from('retail_products')
-      .select(`
+      .select(
+        `
         id,
         name,
         slug,
@@ -1108,7 +1234,9 @@ export class ExchangesService {
         categories(name),
         retail_product_images(image_url, is_primary),
         retail_brands(id, user_id, brand_name, display_name, logo_url)
-      `, { count: 'exact' })
+      `,
+        { count: 'exact' },
+      )
       .eq('status', 'active')
       .eq('is_exchangeable', true)
       .gt('stock_quantity', 0)
@@ -1167,7 +1295,9 @@ export class ExchangesService {
     // Transform
     const transformedProducts = (products || []).map((product: any) => {
       const sortedImages = (product.retail_product_images || [])
-        .sort((a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0))
+        .sort(
+          (a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0),
+        )
         .map((img: any) => img.image_url);
 
       return {

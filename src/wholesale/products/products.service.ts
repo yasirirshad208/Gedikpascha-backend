@@ -70,7 +70,9 @@ export class ProductsService {
       }
 
       if (existingSku) {
-        throw new BadRequestException('A product with this SKU already exists.');
+        throw new BadRequestException(
+          'A product with this SKU already exists.',
+        );
       }
     }
 
@@ -92,7 +94,9 @@ export class ProductsService {
     }
 
     if (!category.is_active) {
-      throw new BadRequestException('Cannot create product with inactive category.');
+      throw new BadRequestException(
+        'Cannot create product with inactive category.',
+      );
     }
 
     // Verify subcategory if provided
@@ -114,17 +118,20 @@ export class ProductsService {
       }
 
       if (!subcategory.is_active) {
-        throw new BadRequestException('Cannot create product with inactive subcategory.');
+        throw new BadRequestException(
+          'Cannot create product with inactive subcategory.',
+        );
       }
     }
 
     // Check if barcode already exists (if provided)
     if (createProductDto.barcode) {
-      const { data: existingBarcode, error: barcodeCheckError } = await serviceClient
-        .from('wholesale_products')
-        .select('id')
-        .eq('barcode', createProductDto.barcode)
-        .maybeSingle();
+      const { data: existingBarcode, error: barcodeCheckError } =
+        await serviceClient
+          .from('wholesale_products')
+          .select('id')
+          .eq('barcode', createProductDto.barcode)
+          .maybeSingle();
 
       if (barcodeCheckError) {
         throw new BadRequestException(
@@ -133,7 +140,9 @@ export class ProductsService {
       }
 
       if (existingBarcode) {
-        throw new BadRequestException('A product with this barcode already exists.');
+        throw new BadRequestException(
+          'A product with this barcode already exists.',
+        );
       }
     }
 
@@ -142,9 +151,9 @@ export class ProductsService {
     let derivedStockQuantity = createProductDto.stockQuantity;
     if (createProductDto.packSizes && createProductDto.packSizes.length > 0) {
       let totalStock = 0;
-      createProductDto.packSizes.forEach(pack => {
+      createProductDto.packSizes.forEach((pack) => {
         if (pack.variants && pack.variants.length > 0) {
-          pack.variants.forEach(variant => {
+          pack.variants.forEach((variant) => {
             totalStock += variant.stock || 0;
           });
         }
@@ -197,7 +206,10 @@ export class ProductsService {
       .single();
 
     if (productError) {
-      if (productError.code === '23505' || productError.message?.includes('unique')) {
+      if (
+        productError.code === '23505' ||
+        productError.message?.includes('unique')
+      ) {
         throw new BadRequestException('Product slug or SKU already exists.');
       }
       throw new BadRequestException(
@@ -210,7 +222,8 @@ export class ProductsService {
       const imageRecords = createProductDto.images.map((img, index) => ({
         product_id: product.id,
         image_url: img.imageUrl,
-        display_order: img.displayOrder !== undefined ? img.displayOrder : index,
+        display_order:
+          img.displayOrder !== undefined ? img.displayOrder : index,
         alt_text: img.altText || null,
         is_primary: img.isPrimary || index === 0,
       }));
@@ -227,17 +240,22 @@ export class ProductsService {
 
     // Create variations if provided
     if (createProductDto.variations && createProductDto.variations.length > 0) {
-      const variationRecords = createProductDto.variations.map((variation, index) => ({
-        product_id: product.id,
-        variation_type: variation.variationType,
-        name: variation.name,
-        value: variation.value || null,
-        price_override: variation.priceOverride || null,
-        stock_quantity: variation.stockQuantity || null,
-        track_stock: variation.trackStock,
-        is_available: variation.isAvailable,
-        display_order: variation.displayOrder !== undefined ? variation.displayOrder : index,
-      }));
+      const variationRecords = createProductDto.variations.map(
+        (variation, index) => ({
+          product_id: product.id,
+          variation_type: variation.variationType,
+          name: variation.name,
+          value: variation.value || null,
+          price_override: variation.priceOverride || null,
+          stock_quantity: variation.stockQuantity || null,
+          track_stock: variation.trackStock,
+          is_available: variation.isAvailable,
+          display_order:
+            variation.displayOrder !== undefined
+              ? variation.displayOrder
+              : index,
+        }),
+      );
 
       const { error: variationsError } = await serviceClient
         .from('wholesale_product_variations')
@@ -265,11 +283,14 @@ export class ProductsService {
             is_popular: pack.isPopular,
             is_best_value: pack.isBestValue,
             is_available: pack.isAvailable,
-            display_order: pack.displayOrder !== undefined ? pack.displayOrder : index,
+            display_order:
+              pack.displayOrder !== undefined ? pack.displayOrder : index,
             has_fixed_quantities: pack.hasFixedQuantities || false,
-            selectable_variation_types: pack.selectableVariationTypes && pack.selectableVariationTypes.length > 0
-              ? pack.selectableVariationTypes
-              : null,
+            selectable_variation_types:
+              pack.selectableVariationTypes &&
+              pack.selectableVariationTypes.length > 0
+                ? pack.selectableVariationTypes
+                : null,
           })
           .select()
           .single();
@@ -286,9 +307,11 @@ export class ProductsService {
             color: variant.color,
             color_value: variant.colorValue || null,
             size: variant.size,
-            custom_values: variant.customValues && Object.keys(variant.customValues).length > 0 
-              ? variant.customValues 
-              : null,
+            custom_values:
+              variant.customValues &&
+              Object.keys(variant.customValues).length > 0
+                ? variant.customValues
+                : null,
             barcode: variant.barcode || null,
             stock: variant.stock || 0,
             fixed_qty: variant.fixedQuantity || 0, // Per-variant fixed quantity
@@ -296,11 +319,19 @@ export class ProductsService {
             otv_rate: variant.otvRate || null,
             stock_code: variant.stockCode || null,
             lot_info: variant.lotInfo || null,
-            image_index: variant.imageIndices?.[0] ?? (variant.imageIndex !== undefined ? variant.imageIndex : null),
-            image_indices: (variant.imageIndices && variant.imageIndices.length > 0)
-              ? variant.imageIndices
-              : (variant.imageIndex !== undefined ? [variant.imageIndex] : null),
-            display_order: variant.displayOrder !== undefined ? variant.displayOrder : vIndex,
+            image_index:
+              variant.imageIndices?.[0] ??
+              (variant.imageIndex !== undefined ? variant.imageIndex : null),
+            image_indices:
+              variant.imageIndices && variant.imageIndices.length > 0
+                ? variant.imageIndices
+                : variant.imageIndex !== undefined
+                  ? [variant.imageIndex]
+                  : null,
+            display_order:
+              variant.displayOrder !== undefined
+                ? variant.displayOrder
+                : vIndex,
             // Legacy fields for compatibility
             variation_type: 'color_size',
             name: `${variant.color} - ${variant.size}`,
@@ -323,12 +354,22 @@ export class ProductsService {
             variation_type: variation.variationType,
             name: variation.name,
             value: variation.value || null,
-            image_index: variation.imageIndices?.[0] ?? (variation.imageIndex !== undefined ? variation.imageIndex : null),
-            image_indices: (variation.imageIndices && variation.imageIndices.length > 0)
-              ? variation.imageIndices
-              : (variation.imageIndex !== undefined ? [variation.imageIndex] : null),
+            image_index:
+              variation.imageIndices?.[0] ??
+              (variation.imageIndex !== undefined
+                ? variation.imageIndex
+                : null),
+            image_indices:
+              variation.imageIndices && variation.imageIndices.length > 0
+                ? variation.imageIndices
+                : variation.imageIndex !== undefined
+                  ? [variation.imageIndex]
+                  : null,
             is_available: variation.isAvailable,
-            display_order: variation.displayOrder !== undefined ? variation.displayOrder : vIndex,
+            display_order:
+              variation.displayOrder !== undefined
+                ? variation.displayOrder
+                : vIndex,
           }));
 
           const { error: variationsError } = await serviceClient
@@ -342,11 +383,13 @@ export class ProductsService {
 
         // Legacy: Insert stock matrix if provided (old format)
         if (pack.stockMatrix && Object.keys(pack.stockMatrix).length > 0) {
-          const stockMatrixRecords = Object.entries(pack.stockMatrix).map(([key, quantity]) => ({
-            pack_size_id: packSize.id,
-            combination_key: key,
-            stock_quantity: quantity,
-          }));
+          const stockMatrixRecords = Object.entries(pack.stockMatrix).map(
+            ([key, quantity]) => ({
+              pack_size_id: packSize.id,
+              combination_key: key,
+              stock_quantity: quantity,
+            }),
+          );
 
           const { error: stockMatrixError } = await serviceClient
             .from('wholesale_pack_stock_matrix')
@@ -358,19 +401,28 @@ export class ProductsService {
         }
 
         // Legacy: Insert fixed quantities if provided and hasFixedQuantities is true (old format)
-        if (pack.hasFixedQuantities && pack.fixedQuantities && Object.keys(pack.fixedQuantities).length > 0) {
-          const fixedQuantityRecords = Object.entries(pack.fixedQuantities).map(([key, quantity]) => ({
-            pack_size_id: packSize.id,
-            combination_key: key,
-            fixed_quantity: quantity,
-          }));
+        if (
+          pack.hasFixedQuantities &&
+          pack.fixedQuantities &&
+          Object.keys(pack.fixedQuantities).length > 0
+        ) {
+          const fixedQuantityRecords = Object.entries(pack.fixedQuantities).map(
+            ([key, quantity]) => ({
+              pack_size_id: packSize.id,
+              combination_key: key,
+              fixed_quantity: quantity,
+            }),
+          );
 
           const { error: fixedQuantitiesError } = await serviceClient
             .from('wholesale_pack_fixed_quantities')
             .insert(fixedQuantityRecords);
 
           if (fixedQuantitiesError) {
-            console.error('Failed to create fixed quantities:', fixedQuantitiesError);
+            console.error(
+              'Failed to create fixed quantities:',
+              fixedQuantitiesError,
+            );
           }
         }
       }
@@ -384,39 +436,46 @@ export class ProductsService {
     return this.getProductComplete(productId, userId, true);
   }
 
-  async getProductComplete(productId: string, userId?: string, verifyOwnership = false) {
+  async getProductComplete(
+    productId: string,
+    userId?: string,
+    verifyOwnership = false,
+  ) {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Get product with brand info (parallel queries)
-    const [productResult, imagesResult, variationsResult, packSizesResult] = await Promise.all([
-      // Get product with basic brand info for ownership verification
-      serviceClient
-        .from('wholesale_products')
-        .select(`
+    const [productResult, imagesResult, variationsResult, packSizesResult] =
+      await Promise.all([
+        // Get product with basic brand info for ownership verification
+        serviceClient
+          .from('wholesale_products')
+          .select(
+            `
           *,
           wholesale_brands(user_id, status)
-        `)
-        .eq('id', productId)
-        .single(),
-      // Get images
-      serviceClient
-        .from('wholesale_product_images')
-        .select('*')
-        .eq('product_id', productId)
-        .order('display_order', { ascending: true }),
-      // Get variations
-      serviceClient
-        .from('wholesale_product_variations')
-        .select('*')
-        .eq('product_id', productId)
-        .order('display_order', { ascending: true }),
-      // Get pack sizes
-      serviceClient
-        .from('wholesale_product_pack_sizes')
-        .select('*')
-        .eq('product_id', productId)
-        .order('display_order', { ascending: true }),
-    ]);
+        `,
+          )
+          .eq('id', productId)
+          .single(),
+        // Get images
+        serviceClient
+          .from('wholesale_product_images')
+          .select('*')
+          .eq('product_id', productId)
+          .order('display_order', { ascending: true }),
+        // Get variations
+        serviceClient
+          .from('wholesale_product_variations')
+          .select('*')
+          .eq('product_id', productId)
+          .order('display_order', { ascending: true }),
+        // Get pack sizes
+        serviceClient
+          .from('wholesale_product_pack_sizes')
+          .select('*')
+          .eq('product_id', productId)
+          .order('display_order', { ascending: true }),
+      ]);
 
     const { data: product, error: productError } = productResult;
     const { data: images } = imagesResult;
@@ -428,13 +487,20 @@ export class ProductsService {
     }
 
     // Verify user owns the brand if required
-    if (verifyOwnership && userId && product.wholesale_brands && product.wholesale_brands.user_id !== userId) {
-      throw new UnauthorizedException('You do not have permission to access this product.');
+    if (
+      verifyOwnership &&
+      userId &&
+      product.wholesale_brands &&
+      product.wholesale_brands.user_id !== userId
+    ) {
+      throw new UnauthorizedException(
+        'You do not have permission to access this product.',
+      );
     }
 
     // Get full brand details and pack variations in parallel
     const brandId = product.wholesale_brand_id;
-    const packSizeIds = (packSizes || []).map(p => p.id);
+    const packSizeIds = (packSizes || []).map((p) => p.id);
 
     // Debug: Log brandId to verify it's being set
     if (!brandId) {
@@ -445,34 +511,44 @@ export class ProductsService {
     const brandQuery = brandId
       ? serviceClient
           .from('wholesale_brands')
-          .select('id, brand_name, display_name, logo_url, description, followers_count')
+          .select(
+            'id, brand_name, display_name, logo_url, description, followers_count',
+          )
           .eq('id', brandId)
           .single()
       : Promise.resolve({ data: null, error: null });
 
-    const packVariationsQuery = packSizeIds.length > 0
-      ? serviceClient
-          .from('wholesale_pack_variations')
-          .select('*')
-          .in('pack_size_id', packSizeIds)
-          .order('display_order', { ascending: true })
-      : Promise.resolve({ data: [] });
+    const packVariationsQuery =
+      packSizeIds.length > 0
+        ? serviceClient
+            .from('wholesale_pack_variations')
+            .select('*')
+            .in('pack_size_id', packSizeIds)
+            .order('display_order', { ascending: true })
+        : Promise.resolve({ data: [] });
 
-    const stockMatrixQuery = packSizeIds.length > 0
-      ? serviceClient
-          .from('wholesale_pack_stock_matrix')
-          .select('*')
-          .in('pack_size_id', packSizeIds)
-      : Promise.resolve({ data: [] });
+    const stockMatrixQuery =
+      packSizeIds.length > 0
+        ? serviceClient
+            .from('wholesale_pack_stock_matrix')
+            .select('*')
+            .in('pack_size_id', packSizeIds)
+        : Promise.resolve({ data: [] });
 
-    const fixedQuantitiesQuery = packSizeIds.length > 0
-      ? serviceClient
-          .from('wholesale_pack_fixed_quantities')
-          .select('*')
-          .in('pack_size_id', packSizeIds)
-      : Promise.resolve({ data: [] });
+    const fixedQuantitiesQuery =
+      packSizeIds.length > 0
+        ? serviceClient
+            .from('wholesale_pack_fixed_quantities')
+            .select('*')
+            .in('pack_size_id', packSizeIds)
+        : Promise.resolve({ data: [] });
 
-    const [brandResult, packVariationsResult, stockMatrixResult, fixedQuantitiesResult] = await Promise.all([
+    const [
+      brandResult,
+      packVariationsResult,
+      stockMatrixResult,
+      fixedQuantitiesResult,
+    ] = await Promise.all([
       brandQuery,
       packVariationsQuery,
       stockMatrixQuery,
@@ -484,7 +560,10 @@ export class ProductsService {
       if (brandResult?.error) {
         console.error('Error fetching brand:', brandResult.error);
       } else if (brandResult?.data) {
-        console.log('Brand data fetched successfully:', { id: brandResult.data.id, display_name: brandResult.data.display_name });
+        console.log('Brand data fetched successfully:', {
+          id: brandResult.data.id,
+          display_name: brandResult.data.display_name,
+        });
       } else {
         console.warn('Brand query returned no data for brandId:', brandId);
       }
@@ -496,68 +575,105 @@ export class ProductsService {
     const fixedQuantities = fixedQuantitiesResult?.data || [];
 
     // Map pack variations, stock matrix, and fixed quantities to pack sizes
-    const packSizesWithDetails = (packSizes || []).map(pack => {
+    const packSizesWithDetails = (packSizes || []).map((pack) => {
       const packFixedQuantities = fixedQuantities
-        .filter(f => f.pack_size_id === pack.id)
-        .reduce((acc, item) => {
-          acc[item.combination_key] = item.fixed_quantity;
-          return acc;
-        }, {} as Record<string, number>);
+        .filter((f) => f.pack_size_id === pack.id)
+        .reduce(
+          (acc, item) => {
+            acc[item.combination_key] = item.fixed_quantity;
+            return acc;
+          },
+          {} as Record<string, number>,
+        );
 
       // Get variations for this pack
-      const packVars = packVariations.filter(v => v.pack_size_id === pack.id);
-      
+      const packVars = packVariations.filter((v) => v.pack_size_id === pack.id);
+
       // Check if using new Trendyol-style variants (has color and size fields)
-      const isNewVariantFormat = packVars.some(v => v.color && v.size);
-      
+      const isNewVariantFormat = packVars.some((v) => v.color && v.size);
+
       // Transform to new variant format for frontend
-      const variants = isNewVariantFormat ? packVars.map(v => ({
-        id: v.id,
-        color: v.color,
-        colorValue: v.color_value,
-        size: v.size,
-        customValues: v.custom_values || {},
-        barcode: v.barcode,
-        stock: v.stock || 0,
-        fixedQuantity: v.fixed_qty || 0,
-        vatRate: v.vat_rate?.toString() || '',
-        otvRate: v.otv_rate?.toString() || '',
-        stockCode: v.stock_code || '',
-        lotInfo: v.lot_info || '',
-        imageIndex: (v.image_indices && v.image_indices.length > 0) ? v.image_indices[0] : v.image_index,
-        imageIndices: (v.image_indices && v.image_indices.length > 0) ? v.image_indices : (v.image_index != null ? [v.image_index] : []),
-        displayOrder: v.display_order,
-      })) : [];
+      const variants = isNewVariantFormat
+        ? packVars.map((v) => ({
+            id: v.id,
+            color: v.color,
+            colorValue: v.color_value,
+            size: v.size,
+            customValues: v.custom_values || {},
+            barcode: v.barcode,
+            stock: v.stock || 0,
+            fixedQuantity: v.fixed_qty || 0,
+            vatRate: v.vat_rate?.toString() || '',
+            otvRate: v.otv_rate?.toString() || '',
+            stockCode: v.stock_code || '',
+            lotInfo: v.lot_info || '',
+            imageIndex:
+              v.image_indices && v.image_indices.length > 0
+                ? v.image_indices[0]
+                : v.image_index,
+            imageIndices:
+              v.image_indices && v.image_indices.length > 0
+                ? v.image_indices
+                : v.image_index != null
+                  ? [v.image_index]
+                  : [],
+            displayOrder: v.display_order,
+          }))
+        : [];
 
       // Extract unique colors and sizes from variants for UI state
-      const colors = isNewVariantFormat ? (() => {
-        const colorMap = new Map<string, { id: string; name: string; value: string; imageIndex: number | null; imageIndices: number[] }>();
-        packVars.forEach(v => {
-          if (!v.color) return;
-          const existing = colorMap.get(v.color);
-          const imgIndices = (v.image_indices && v.image_indices.length > 0) ? v.image_indices : (v.image_index != null ? [v.image_index] : []);
-          const imgIndex = imgIndices.length > 0 ? imgIndices[0] : null;
-          if (!existing) {
-            colorMap.set(v.color, {
-              id: v.id,
-              name: v.color,
-              value: v.color_value || '#000000',
-              imageIndex: imgIndex,
-              imageIndices: imgIndices,
+      const colors = isNewVariantFormat
+        ? (() => {
+            const colorMap = new Map<
+              string,
+              {
+                id: string;
+                name: string;
+                value: string;
+                imageIndex: number | null;
+                imageIndices: number[];
+              }
+            >();
+            packVars.forEach((v) => {
+              if (!v.color) return;
+              const existing = colorMap.get(v.color);
+              const imgIndices =
+                v.image_indices && v.image_indices.length > 0
+                  ? v.image_indices
+                  : v.image_index != null
+                    ? [v.image_index]
+                    : [];
+              const imgIndex = imgIndices.length > 0 ? imgIndices[0] : null;
+              if (!existing) {
+                colorMap.set(v.color, {
+                  id: v.id,
+                  name: v.color,
+                  value: v.color_value || '#000000',
+                  imageIndex: imgIndex,
+                  imageIndices: imgIndices,
+                });
+              } else if (
+                existing.imageIndices.length === 0 &&
+                imgIndices.length > 0
+              ) {
+                colorMap.set(v.color, {
+                  ...existing,
+                  imageIndex: imgIndex,
+                  imageIndices: imgIndices,
+                });
+              }
             });
-          } else if (existing.imageIndices.length === 0 && imgIndices.length > 0) {
-            colorMap.set(v.color, { ...existing, imageIndex: imgIndex, imageIndices: imgIndices });
-          }
-        });
-        return [...colorMap.values()];
-      })() : [];
-      const sizes = isNewVariantFormat ? 
-        [...new Set(packVars.map(v => v.size))] : [];
+            return [...colorMap.values()];
+          })()
+        : [];
+      const sizes = isNewVariantFormat
+        ? [...new Set(packVars.map((v) => v.size))]
+        : [];
 
       // Extract custom variations from variants
       const customVariationsMap = new Map<string, Set<string>>();
       if (isNewVariantFormat) {
-        packVars.forEach(v => {
+        packVars.forEach((v) => {
           if (v.custom_values && typeof v.custom_values === 'object') {
             Object.entries(v.custom_values).forEach(([type, value]) => {
               if (!customVariationsMap.has(type)) {
@@ -568,25 +684,32 @@ export class ProductsService {
           }
         });
       }
-      const customVariations = [...customVariationsMap.entries()].map(([type, valuesSet], idx) => ({
-        id: `custom-${idx}`,
-        type,
-        values: [...valuesSet],
-      }));
+      const customVariations = [...customVariationsMap.entries()].map(
+        ([type, valuesSet], idx) => ({
+          id: `custom-${idx}`,
+          type,
+          values: [...valuesSet],
+        }),
+      );
 
       return {
         ...pack,
         // Legacy format for backward compatibility
         variations: packVars,
         stockMatrix: stockMatrix
-          .filter(s => s.pack_size_id === pack.id)
-          .reduce((acc, item) => {
-            acc[item.combination_key] = item.stock_quantity;
-            return acc;
-          }, {} as Record<string, number>),
+          .filter((s) => s.pack_size_id === pack.id)
+          .reduce(
+            (acc, item) => {
+              acc[item.combination_key] = item.stock_quantity;
+              return acc;
+            },
+            {} as Record<string, number>,
+          ),
         fixedQuantities: packFixedQuantities,
         // Ensure has_fixed_quantities reflects actual data
-        has_fixed_quantities: pack.has_fixed_quantities || Object.keys(packFixedQuantities).length > 0,
+        has_fixed_quantities:
+          pack.has_fixed_quantities ||
+          Object.keys(packFixedQuantities).length > 0,
         // New Trendyol-style format
         variants,
         colors,
@@ -600,14 +723,16 @@ export class ProductsService {
       images: images || [],
       variations: variations || [],
       packSizes: packSizesWithDetails,
-      wholesale_brands: brandData ? {
-        id: brandData.id,
-        brand_name: brandData.brand_name,
-        display_name: brandData.display_name,
-        logo_url: brandData.logo_url,
-        description: brandData.description,
-        followers_count: brandData.followers_count || 0,
-      } : (product.wholesale_brands || null),
+      wholesale_brands: brandData
+        ? {
+            id: brandData.id,
+            brand_name: brandData.brand_name,
+            display_name: brandData.display_name,
+            logo_url: brandData.logo_url,
+            description: brandData.description,
+            followers_count: brandData.followers_count || 0,
+          }
+        : product.wholesale_brands || null,
     };
   }
 
@@ -659,8 +784,12 @@ export class ProductsService {
     // Apply search filter
     if (search && search.trim()) {
       const searchTerm = `%${search.trim()}%`;
-      countQuery = countQuery.or(`name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`);
-      productsQuery = productsQuery.or(`name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`);
+      countQuery = countQuery.or(
+        `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`,
+      );
+      productsQuery = productsQuery.or(
+        `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`,
+      );
     }
 
     // Apply category filter
@@ -696,23 +825,23 @@ export class ProductsService {
     }
 
     // Get images for all products in one query
-    const productIds = (products || []).map(p => p.id);
+    const productIds = (products || []).map((p) => p.id);
     let productImages: any[] = [];
-    
+
     if (productIds.length > 0) {
       const { data: images } = await serviceClient
         .from('wholesale_product_images')
         .select('*')
         .in('product_id', productIds)
         .order('display_order', { ascending: true });
-      
+
       productImages = images || [];
     }
 
     // Map images to products
-    const productsWithImages = (products || []).map(product => ({
+    const productsWithImages = (products || []).map((product) => ({
       ...product,
-      images: productImages.filter(img => img.product_id === product.id),
+      images: productImages.filter((img) => img.product_id === product.id),
     }));
 
     return {
@@ -736,10 +865,12 @@ export class ProductsService {
     // Verify product exists and user owns it
     const { data: product, error: productError } = await serviceClient
       .from('wholesale_products')
-      .select(`
+      .select(
+        `
         *,
         wholesale_brands!inner(user_id, status)
-      `)
+      `,
+      )
       .eq('id', productId)
       .single();
 
@@ -748,13 +879,16 @@ export class ProductsService {
     }
 
     if (product.wholesale_brands.user_id !== userId) {
-      throw new UnauthorizedException('You do not have permission to update this product.');
+      throw new UnauthorizedException(
+        'You do not have permission to update this product.',
+      );
     }
 
     // Prepare update data
     const updateData: any = {};
 
-    if (updateProductDto.name !== undefined) updateData.name = updateProductDto.name;
+    if (updateProductDto.name !== undefined)
+      updateData.name = updateProductDto.name;
     if (updateProductDto.slug !== undefined) {
       // Check slug uniqueness
       const { data: existingProduct } = await serviceClient
@@ -766,7 +900,9 @@ export class ProductsService {
         .maybeSingle();
 
       if (existingProduct) {
-        throw new BadRequestException('A product with this slug already exists for your brand.');
+        throw new BadRequestException(
+          'A product with this slug already exists for your brand.',
+        );
       }
 
       updateData.slug = updateProductDto.slug;
@@ -782,13 +918,17 @@ export class ProductsService {
           .maybeSingle();
 
         if (existingSku) {
-          throw new BadRequestException('A product with this SKU already exists.');
+          throw new BadRequestException(
+            'A product with this SKU already exists.',
+          );
         }
       }
       updateData.sku = updateProductDto.sku || null;
     }
-    if (updateProductDto.description !== undefined) updateData.description = updateProductDto.description || null;
-    if (updateProductDto.shortDescription !== undefined) updateData.short_description = updateProductDto.shortDescription || null;
+    if (updateProductDto.description !== undefined)
+      updateData.description = updateProductDto.description || null;
+    if (updateProductDto.shortDescription !== undefined)
+      updateData.short_description = updateProductDto.shortDescription || null;
     if (updateProductDto.categoryId !== undefined) {
       // Verify category
       const { data: category } = await serviceClient
@@ -850,18 +990,24 @@ export class ProductsService {
 
     // If packSizes with variants are provided in the update, recompute stock from variants;
     // otherwise, fall back to the DTO's stockQuantity field.
-    console.log('[UpdateProduct] stockQuantity from DTO:', updateProductDto.stockQuantity);
-    console.log('[UpdateProduct] packSizes count:', updateProductDto.packSizes?.length);
+    console.log(
+      '[UpdateProduct] stockQuantity from DTO:',
+      updateProductDto.stockQuantity,
+    );
+    console.log(
+      '[UpdateProduct] packSizes count:',
+      updateProductDto.packSizes?.length,
+    );
     if (updateProductDto.packSizes && updateProductDto.packSizes.length > 0) {
       const hasVariants = updateProductDto.packSizes.some(
-        pack => pack.variants && pack.variants.length > 0
+        (pack) => pack.variants && pack.variants.length > 0,
       );
       console.log('[UpdateProduct] hasVariants:', hasVariants);
       if (hasVariants) {
         let totalStock = 0;
-        updateProductDto.packSizes.forEach(pack => {
+        updateProductDto.packSizes.forEach((pack) => {
           if (pack.variants && pack.variants.length > 0) {
-            pack.variants.forEach(variant => {
+            pack.variants.forEach((variant) => {
               totalStock += variant.stock || 0;
             });
           }
@@ -873,21 +1019,40 @@ export class ProductsService {
     } else if (updateProductDto.stockQuantity !== undefined) {
       updateData.stock_quantity = updateProductDto.stockQuantity;
     }
-    console.log('[UpdateProduct] Final updateData.stock_quantity:', updateData.stock_quantity);
-    if (updateProductDto.trackInventory !== undefined) updateData.track_inventory = updateProductDto.trackInventory;
-    if (updateProductDto.lowStockThreshold !== undefined) updateData.low_stock_threshold = updateProductDto.lowStockThreshold || null;
-    if (updateProductDto.status !== undefined) updateData.status = updateProductDto.status;
-    if (updateProductDto.isFeatured !== undefined) updateData.is_featured = updateProductDto.isFeatured;
-    if (updateProductDto.condition !== undefined) updateData.condition = updateProductDto.condition;
-    if (updateProductDto.shippingInfo !== undefined) updateData.shipping_info = updateProductDto.shippingInfo || null;
-    if (updateProductDto.isShippingFree !== undefined) updateData.is_shipping_free = updateProductDto.isShippingFree;
-    if (updateProductDto.shippingCost !== undefined) updateData.shipping_cost = updateProductDto.shippingCost || null;
-    if (updateProductDto.estimatedDeliveryDays !== undefined) updateData.estimated_delivery_days = updateProductDto.estimatedDeliveryDays || null;
-    if (updateProductDto.productDetails !== undefined) updateData.product_details = updateProductDto.productDetails || null;
-    if (updateProductDto.sizeChart !== undefined) updateData.size_chart = updateProductDto.sizeChart || null;
-    if (updateProductDto.metaTitle !== undefined) updateData.meta_title = updateProductDto.metaTitle || null;
-    if (updateProductDto.metaDescription !== undefined) updateData.meta_description = updateProductDto.metaDescription || null;
-    if (updateProductDto.metaKeywords !== undefined) updateData.meta_keywords = updateProductDto.metaKeywords || null;
+    console.log(
+      '[UpdateProduct] Final updateData.stock_quantity:',
+      updateData.stock_quantity,
+    );
+    if (updateProductDto.trackInventory !== undefined)
+      updateData.track_inventory = updateProductDto.trackInventory;
+    if (updateProductDto.lowStockThreshold !== undefined)
+      updateData.low_stock_threshold =
+        updateProductDto.lowStockThreshold || null;
+    if (updateProductDto.status !== undefined)
+      updateData.status = updateProductDto.status;
+    if (updateProductDto.isFeatured !== undefined)
+      updateData.is_featured = updateProductDto.isFeatured;
+    if (updateProductDto.condition !== undefined)
+      updateData.condition = updateProductDto.condition;
+    if (updateProductDto.shippingInfo !== undefined)
+      updateData.shipping_info = updateProductDto.shippingInfo || null;
+    if (updateProductDto.isShippingFree !== undefined)
+      updateData.is_shipping_free = updateProductDto.isShippingFree;
+    if (updateProductDto.shippingCost !== undefined)
+      updateData.shipping_cost = updateProductDto.shippingCost || null;
+    if (updateProductDto.estimatedDeliveryDays !== undefined)
+      updateData.estimated_delivery_days =
+        updateProductDto.estimatedDeliveryDays || null;
+    if (updateProductDto.productDetails !== undefined)
+      updateData.product_details = updateProductDto.productDetails || null;
+    if (updateProductDto.sizeChart !== undefined)
+      updateData.size_chart = updateProductDto.sizeChart || null;
+    if (updateProductDto.metaTitle !== undefined)
+      updateData.meta_title = updateProductDto.metaTitle || null;
+    if (updateProductDto.metaDescription !== undefined)
+      updateData.meta_description = updateProductDto.metaDescription || null;
+    if (updateProductDto.metaKeywords !== undefined)
+      updateData.meta_keywords = updateProductDto.metaKeywords || null;
 
     // Update product
     const { data: updatedProduct, error: updateError } = await serviceClient
@@ -917,7 +1082,8 @@ export class ProductsService {
           product_id: productId,
           image_url: image.imageUrl,
           alt_text: image.altText || null,
-          display_order: image.displayOrder !== undefined ? image.displayOrder : index,
+          display_order:
+            image.displayOrder !== undefined ? image.displayOrder : index,
           is_primary: image.isPrimary ?? index === 0,
         }));
 
@@ -941,21 +1107,29 @@ export class ProductsService {
 
       // Insert new variations
       if (updateProductDto.variations.length > 0) {
-        const variationRecords = updateProductDto.variations.map((variation, index) => ({
-          product_id: productId,
-          variation_type: variation.variationType,
-          name: variation.name,
-          value: variation.value || null,
-          is_available: variation.isAvailable,
-          display_order: variation.displayOrder !== undefined ? variation.displayOrder : index,
-        }));
+        const variationRecords = updateProductDto.variations.map(
+          (variation, index) => ({
+            product_id: productId,
+            variation_type: variation.variationType,
+            name: variation.name,
+            value: variation.value || null,
+            is_available: variation.isAvailable,
+            display_order:
+              variation.displayOrder !== undefined
+                ? variation.displayOrder
+                : index,
+          }),
+        );
 
         const { error: variationsError } = await serviceClient
           .from('wholesale_product_variations')
           .insert(variationRecords);
 
         if (variationsError) {
-          console.error('Failed to update product variations:', variationsError);
+          console.error(
+            'Failed to update product variations:',
+            variationsError,
+          );
         }
       }
     }
@@ -968,7 +1142,7 @@ export class ProductsService {
         .select('id')
         .eq('product_id', productId);
 
-      const existingPackSizeIds = (existingPackSizes || []).map(p => p.id);
+      const existingPackSizeIds = (existingPackSizes || []).map((p) => p.id);
 
       // Delete existing stock matrix and fixed quantities entries for these pack sizes
       if (existingPackSizeIds.length > 0) {
@@ -998,7 +1172,11 @@ export class ProductsService {
 
       // Insert new pack sizes with their variations and stock matrix
       if (updateProductDto.packSizes.length > 0) {
-        for (let index = 0; index < updateProductDto.packSizes.length; index++) {
+        for (
+          let index = 0;
+          index < updateProductDto.packSizes.length;
+          index++
+        ) {
           const pack = updateProductDto.packSizes[index];
 
           // Insert pack size
@@ -1013,11 +1191,14 @@ export class ProductsService {
               is_popular: pack.isPopular,
               is_best_value: pack.isBestValue,
               is_available: pack.isAvailable,
-              display_order: pack.displayOrder !== undefined ? pack.displayOrder : index,
+              display_order:
+                pack.displayOrder !== undefined ? pack.displayOrder : index,
               has_fixed_quantities: pack.hasFixedQuantities || false,
-              selectable_variation_types: pack.selectableVariationTypes && pack.selectableVariationTypes.length > 0
-                ? pack.selectableVariationTypes
-                : null,
+              selectable_variation_types:
+                pack.selectableVariationTypes &&
+                pack.selectableVariationTypes.length > 0
+                  ? pack.selectableVariationTypes
+                  : null,
             })
             .select()
             .single();
@@ -1034,9 +1215,11 @@ export class ProductsService {
               color: variant.color,
               color_value: variant.colorValue || null,
               size: variant.size,
-              custom_values: variant.customValues && Object.keys(variant.customValues).length > 0 
-                ? variant.customValues 
-                : null,
+              custom_values:
+                variant.customValues &&
+                Object.keys(variant.customValues).length > 0
+                  ? variant.customValues
+                  : null,
               barcode: variant.barcode || null,
               stock: variant.stock || 0,
               fixed_qty: variant.fixedQuantity || 0, // Per-variant fixed quantity
@@ -1044,11 +1227,19 @@ export class ProductsService {
               otv_rate: variant.otvRate || null,
               stock_code: variant.stockCode || null,
               lot_info: variant.lotInfo || null,
-              image_index: variant.imageIndices?.[0] ?? (variant.imageIndex !== undefined ? variant.imageIndex : null),
-              image_indices: (variant.imageIndices && variant.imageIndices.length > 0)
-                ? variant.imageIndices
-                : (variant.imageIndex !== undefined ? [variant.imageIndex] : null),
-              display_order: variant.displayOrder !== undefined ? variant.displayOrder : vIndex,
+              image_index:
+                variant.imageIndices?.[0] ??
+                (variant.imageIndex !== undefined ? variant.imageIndex : null),
+              image_indices:
+                variant.imageIndices && variant.imageIndices.length > 0
+                  ? variant.imageIndices
+                  : variant.imageIndex !== undefined
+                    ? [variant.imageIndex]
+                    : null,
+              display_order:
+                variant.displayOrder !== undefined
+                  ? variant.displayOrder
+                  : vIndex,
               // Legacy fields for compatibility
               variation_type: 'color_size',
               name: `${variant.color} - ${variant.size}`,
@@ -1066,32 +1257,45 @@ export class ProductsService {
           }
           // Legacy: Insert pack variations if provided (old format)
           else if (pack.variations && pack.variations.length > 0) {
-            const variationRecords = pack.variations.map((variation, vIndex) => ({
-              pack_size_id: packSize.id,
-              variation_type: variation.variationType,
-              name: variation.name,
-              value: variation.value || null,
-              image_index: variation.imageIndex !== undefined ? variation.imageIndex : null,
-              is_available: variation.isAvailable,
-              display_order: variation.displayOrder !== undefined ? variation.displayOrder : vIndex,
-            }));
+            const variationRecords = pack.variations.map(
+              (variation, vIndex) => ({
+                pack_size_id: packSize.id,
+                variation_type: variation.variationType,
+                name: variation.name,
+                value: variation.value || null,
+                image_index:
+                  variation.imageIndex !== undefined
+                    ? variation.imageIndex
+                    : null,
+                is_available: variation.isAvailable,
+                display_order:
+                  variation.displayOrder !== undefined
+                    ? variation.displayOrder
+                    : vIndex,
+              }),
+            );
 
             const { error: variationsError } = await serviceClient
               .from('wholesale_pack_variations')
               .insert(variationRecords);
 
             if (variationsError) {
-              console.error('Failed to update pack variations:', variationsError);
+              console.error(
+                'Failed to update pack variations:',
+                variationsError,
+              );
             }
           }
 
           // Legacy: Insert stock matrix if provided (old format)
           if (pack.stockMatrix && Object.keys(pack.stockMatrix).length > 0) {
-            const stockMatrixRecords = Object.entries(pack.stockMatrix).map(([key, quantity]) => ({
-              pack_size_id: packSize.id,
-              combination_key: key,
-              stock_quantity: quantity,
-            }));
+            const stockMatrixRecords = Object.entries(pack.stockMatrix).map(
+              ([key, quantity]) => ({
+                pack_size_id: packSize.id,
+                combination_key: key,
+                stock_quantity: quantity,
+              }),
+            );
 
             const { error: stockMatrixError } = await serviceClient
               .from('wholesale_pack_stock_matrix')
@@ -1103,8 +1307,14 @@ export class ProductsService {
           }
 
           // Legacy: Insert fixed quantities if provided and hasFixedQuantities is true (old format)
-          if (pack.hasFixedQuantities && pack.fixedQuantities && Object.keys(pack.fixedQuantities).length > 0) {
-            const fixedQuantityRecords = Object.entries(pack.fixedQuantities).map(([key, quantity]) => ({
+          if (
+            pack.hasFixedQuantities &&
+            pack.fixedQuantities &&
+            Object.keys(pack.fixedQuantities).length > 0
+          ) {
+            const fixedQuantityRecords = Object.entries(
+              pack.fixedQuantities,
+            ).map(([key, quantity]) => ({
               pack_size_id: packSize.id,
               combination_key: key,
               fixed_quantity: quantity,
@@ -1115,7 +1325,10 @@ export class ProductsService {
               .insert(fixedQuantityRecords);
 
             if (fixedQuantitiesError) {
-              console.error('Failed to update fixed quantities:', fixedQuantitiesError);
+              console.error(
+                'Failed to update fixed quantities:',
+                fixedQuantitiesError,
+              );
             }
           }
         }
@@ -1131,10 +1344,12 @@ export class ProductsService {
     // Verify product exists and user owns it
     const { data: product, error: productError } = await serviceClient
       .from('wholesale_products')
-      .select(`
+      .select(
+        `
         *,
         wholesale_brands!inner(user_id)
-      `)
+      `,
+      )
       .eq('id', productId)
       .single();
 
@@ -1143,7 +1358,9 @@ export class ProductsService {
     }
 
     if (product.wholesale_brands.user_id !== userId) {
-      throw new UnauthorizedException('You do not have permission to delete this product.');
+      throw new UnauthorizedException(
+        'You do not have permission to delete this product.',
+      );
     }
 
     // Soft delete
@@ -1179,23 +1396,23 @@ export class ProductsService {
     }
 
     // Get images for all products
-    const productIds = (products || []).map(p => p.id);
+    const productIds = (products || []).map((p) => p.id);
     let productImages: any[] = [];
-    
+
     if (productIds.length > 0) {
       const { data: images } = await serviceClient
         .from('wholesale_product_images')
         .select('*')
         .in('product_id', productIds)
         .order('display_order', { ascending: true });
-      
+
       productImages = images || [];
     }
 
     // Map images to products and format response
-    return (products || []).map(product => ({
+    return (products || []).map((product) => ({
       ...product,
-      images: productImages.filter(img => img.product_id === product.id),
+      images: productImages.filter((img) => img.product_id === product.id),
     }));
   }
 
@@ -1216,23 +1433,23 @@ export class ProductsService {
     }
 
     // Get images for all products
-    const productIds = (products || []).map(p => p.id);
+    const productIds = (products || []).map((p) => p.id);
     let productImages: any[] = [];
-    
+
     if (productIds.length > 0) {
       const { data: images } = await serviceClient
         .from('wholesale_product_images')
         .select('*')
         .in('product_id', productIds)
         .order('display_order', { ascending: true });
-      
+
       productImages = images || [];
     }
 
     // Map images to products and format response
-    return (products || []).map(product => ({
+    return (products || []).map((product) => ({
       ...product,
-      images: productImages.filter(img => img.product_id === product.id),
+      images: productImages.filter((img) => img.product_id === product.id),
     }));
   }
 
@@ -1254,23 +1471,23 @@ export class ProductsService {
     }
 
     // Get images for all products
-    const productIds = (products || []).map(p => p.id);
+    const productIds = (products || []).map((p) => p.id);
     let productImages: any[] = [];
-    
+
     if (productIds.length > 0) {
       const { data: images } = await serviceClient
         .from('wholesale_product_images')
         .select('*')
         .in('product_id', productIds)
         .order('display_order', { ascending: true });
-      
+
       productImages = images || [];
     }
 
     // Map images to products and format response
-    return (products || []).map(product => ({
+    return (products || []).map((product) => ({
       ...product,
-      images: productImages.filter(img => img.product_id === product.id),
+      images: productImages.filter((img) => img.product_id === product.id),
     }));
   }
 
@@ -1339,13 +1556,13 @@ export class ProductsService {
         return [];
       }
 
-      const packSizeIds = [...new Set(packVariants.map(v => v.pack_size_id))];
+      const packSizeIds = [...new Set(packVariants.map((v) => v.pack_size_id))];
       const { data: packSizes } = await serviceClient
         .from('wholesale_product_pack_sizes')
         .select('product_id')
         .in('id', packSizeIds);
 
-      return packSizes ? [...new Set(packSizes.map(p => p.product_id))] : [];
+      return packSizes ? [...new Set(packSizes.map((p) => p.product_id))] : [];
     };
 
     const getProductIdsBySize = async (): Promise<string[] | null> => {
@@ -1362,13 +1579,13 @@ export class ProductsService {
         return [];
       }
 
-      const packSizeIds = [...new Set(packVariants.map(v => v.pack_size_id))];
+      const packSizeIds = [...new Set(packVariants.map((v) => v.pack_size_id))];
       const { data: packSizes } = await serviceClient
         .from('wholesale_product_pack_sizes')
         .select('product_id')
         .in('id', packSizeIds);
 
-      return packSizes ? [...new Set(packSizes.map(p => p.product_id))] : [];
+      return packSizes ? [...new Set(packSizes.map((p) => p.product_id))] : [];
     };
 
     const getProductIdsByMaterial = async (): Promise<string[] | null> => {
@@ -1382,11 +1599,18 @@ export class ProductsService {
         .eq('variation_type', 'material')
         .in('name', materials);
 
-      return variations ? [...new Set(variations.map(v => v.product_id))] : [];
+      return variations
+        ? [...new Set(variations.map((v) => v.product_id))]
+        : [];
     };
 
     // Resolve category and filter product IDs in parallel
-    const [resolvedCategoryId, colorProductIds, sizeProductIds, materialProductIds] = await Promise.all([
+    const [
+      resolvedCategoryId,
+      colorProductIds,
+      sizeProductIds,
+      materialProductIds,
+    ] = await Promise.all([
       resolveCategoryId(),
       getProductIdsByColor(),
       getProductIdsBySize(),
@@ -1407,7 +1631,7 @@ export class ProductsService {
 
     // First, get product IDs that match pack variant filters (colors, sizes, materials)
     let filteredProductIds: string[] | null = null;
-    
+
     // Apply color filter
     if (colorProductIds !== null) {
       if (colorProductIds.length === 0) {
@@ -1416,7 +1640,7 @@ export class ProductsService {
         filteredProductIds = colorProductIds;
       }
     }
-    
+
     // Apply size filter
     if (sizeProductIds !== null) {
       if (sizeProductIds.length === 0) {
@@ -1424,10 +1648,12 @@ export class ProductsService {
       } else if (filteredProductIds === null) {
         filteredProductIds = sizeProductIds;
       } else if (filteredProductIds.length > 0) {
-        filteredProductIds = filteredProductIds.filter(id => sizeProductIds.includes(id));
+        filteredProductIds = filteredProductIds.filter((id) =>
+          sizeProductIds.includes(id),
+        );
       }
     }
-    
+
     // Apply material filter
     if (materialProductIds !== null) {
       if (materialProductIds.length === 0) {
@@ -1435,7 +1661,9 @@ export class ProductsService {
       } else if (filteredProductIds === null) {
         filteredProductIds = materialProductIds;
       } else if (filteredProductIds.length > 0) {
-        filteredProductIds = filteredProductIds.filter(id => materialProductIds.includes(id));
+        filteredProductIds = filteredProductIds.filter((id) =>
+          materialProductIds.includes(id),
+        );
       }
     }
 
@@ -1451,7 +1679,10 @@ export class ProductsService {
 
     // Apply product ID filter from pack variant/variation filters
     if (filteredProductIds !== null) {
-      if (Array.isArray(filteredProductIds) && filteredProductIds.length === 0) {
+      if (
+        Array.isArray(filteredProductIds) &&
+        filteredProductIds.length === 0
+      ) {
         // No products match, return empty result
         return {
           products: [],
@@ -1477,20 +1708,26 @@ export class ProductsService {
     } else if (filter === 'sale') {
       // Sale: only products with sale_percentage > 0, ordered by sale_percentage DESC
       countQuery = countQuery.gt('sale_percentage', 0);
-      productsQuery = productsQuery.gt('sale_percentage', 0).order('sale_percentage', { ascending: false });
+      productsQuery = productsQuery
+        .gt('sale_percentage', 0)
+        .order('sale_percentage', { ascending: false });
     }
 
     // Apply search filter
     if (search && search.trim()) {
       const searchTerm = `%${search.trim()}%`;
-      countQuery = countQuery.or(`name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`);
-      productsQuery = productsQuery.or(`name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`);
+      countQuery = countQuery.or(
+        `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`,
+      );
+      productsQuery = productsQuery.or(
+        `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`,
+      );
     }
 
     // Apply category filter
-      if (resolvedCategoryId && resolvedCategoryId !== 'all') {
-        countQuery = countQuery.eq('category_id', resolvedCategoryId);
-        productsQuery = productsQuery.eq('category_id', resolvedCategoryId);
+    if (resolvedCategoryId && resolvedCategoryId !== 'all') {
+      countQuery = countQuery.eq('category_id', resolvedCategoryId);
+      productsQuery = productsQuery.eq('category_id', resolvedCategoryId);
     }
 
     // Apply subcategory filter
@@ -1553,21 +1790,27 @@ export class ProductsService {
     // Gender filter
     if (gender && gender.length > 0) {
       // Use OR logic for multiple gender values
-      const genderConditions = gender.map(g => `product_details->>'Gender'.eq.${g}`).join(',');
+      const genderConditions = gender
+        .map((g) => `product_details->>'Gender'.eq.${g}`)
+        .join(',');
       countQuery = countQuery.or(genderConditions);
       productsQuery = productsQuery.or(genderConditions);
     }
 
     // Product Type filter
     if (productType && productType.length > 0) {
-      const productTypeConditions = productType.map(pt => `product_details->>'ProductType'.eq.${pt}`).join(',');
+      const productTypeConditions = productType
+        .map((pt) => `product_details->>'ProductType'.eq.${pt}`)
+        .join(',');
       countQuery = countQuery.or(productTypeConditions);
       productsQuery = productsQuery.or(productTypeConditions);
     }
 
     // Style filter
     if (style && style.length > 0) {
-      const styleConditions = style.map(s => `product_details->>'Style'.eq.${s}`).join(',');
+      const styleConditions = style
+        .map((s) => `product_details->>'Style'.eq.${s}`)
+        .join(',');
       countQuery = countQuery.or(styleConditions);
       productsQuery = productsQuery.or(styleConditions);
     }
@@ -1576,8 +1819,12 @@ export class ProductsService {
     if (features && features.length > 0) {
       // Features is stored as JSON array, use contains
       for (const feature of features) {
-        countQuery = countQuery.contains('product_details', { Features: [feature] });
-        productsQuery = productsQuery.contains('product_details', { Features: [feature] });
+        countQuery = countQuery.contains('product_details', {
+          Features: [feature],
+        });
+        productsQuery = productsQuery.contains('product_details', {
+          Features: [feature],
+        });
       }
     }
 
@@ -1586,20 +1833,40 @@ export class ProductsService {
       for (const [filterKey, filterValues] of Object.entries(dynamicFilters)) {
         if (filterValues && filterValues.length > 0) {
           // Convert filterKey from camelCase to the actual JSON path
-          const jsonPath = filterKey.charAt(0).toUpperCase() + filterKey.slice(1);
-          
+          const jsonPath =
+            filterKey.charAt(0).toUpperCase() + filterKey.slice(1);
+
           // Check if it's an array field (Features, Ingredients, Connectivity, etc.)
-          const arrayFields = ['Features', 'Ingredients', 'Connectivity', 'SpecialFeatures', 'Dietary', 'Allergens', 'Usage', 'SafetyStandards', 'SpecialNeeds', 'Certifications', 'SpecialDiet', 'SpecialEdition'];
-          
+          const arrayFields = [
+            'Features',
+            'Ingredients',
+            'Connectivity',
+            'SpecialFeatures',
+            'Dietary',
+            'Allergens',
+            'Usage',
+            'SafetyStandards',
+            'SpecialNeeds',
+            'Certifications',
+            'SpecialDiet',
+            'SpecialEdition',
+          ];
+
           if (arrayFields.includes(jsonPath)) {
             // For array fields, use contains
             for (const value of filterValues) {
-              countQuery = countQuery.contains('product_details', { [jsonPath]: [value] });
-              productsQuery = productsQuery.contains('product_details', { [jsonPath]: [value] });
+              countQuery = countQuery.contains('product_details', {
+                [jsonPath]: [value],
+              });
+              productsQuery = productsQuery.contains('product_details', {
+                [jsonPath]: [value],
+              });
             }
           } else {
             // For single-value fields, use OR logic
-            const conditions = filterValues.map(v => `product_details->>'${jsonPath}'.eq.${v}`).join(',');
+            const conditions = filterValues
+              .map((v) => `product_details->>'${jsonPath}'.eq.${v}`)
+              .join(',');
             countQuery = countQuery.or(conditions);
             productsQuery = productsQuery.or(conditions);
           }
@@ -1610,15 +1877,22 @@ export class ProductsService {
     // Apply sorting (only if filter is not set, as filter determines the sort order)
     if (!filter) {
       if (sortBy === 'price-asc') {
-        productsQuery = productsQuery.order('wholesale_price', { ascending: true });
+        productsQuery = productsQuery.order('wholesale_price', {
+          ascending: true,
+        });
       } else if (sortBy === 'price-desc') {
-        productsQuery = productsQuery.order('wholesale_price', { ascending: false });
+        productsQuery = productsQuery.order('wholesale_price', {
+          ascending: false,
+        });
       } else if (sortBy === 'newest') {
         productsQuery = productsQuery.order('created_at', { ascending: false });
       } else if (sortBy === 'popular') {
         productsQuery = productsQuery.order('total_sold', { ascending: false });
       } else if (sortBy === 'rating') {
-        productsQuery = productsQuery.order('rating', { ascending: false, nullsFirst: false });
+        productsQuery = productsQuery.order('rating', {
+          ascending: false,
+          nullsFirst: false,
+        });
       } else {
         // Default: order by created_at desc
         productsQuery = productsQuery.order('created_at', { ascending: false });
@@ -1627,7 +1901,10 @@ export class ProductsService {
 
     // Get products count
     // Get products count and products in parallel
-    const [{ count, error: countError }, { data: products, error: productsError }] = await Promise.all([
+    const [
+      { count, error: countError },
+      { data: products, error: productsError },
+    ] = await Promise.all([
       countQuery,
       productsQuery.range(offset, offset + limit - 1),
     ]);
@@ -1637,7 +1914,7 @@ export class ProductsService {
         `Failed to fetch products count: ${countError.message || 'Unknown error'}`,
       );
     }
-    
+
     if (productsError) {
       throw new BadRequestException(
         `Failed to fetch products: ${productsError.message || 'Unknown error'}`,
@@ -1645,23 +1922,23 @@ export class ProductsService {
     }
 
     // Get images for all products
-    const productIds = (products || []).map(p => p.id);
+    const productIds = (products || []).map((p) => p.id);
     let productImages: any[] = [];
-    
+
     if (productIds.length > 0) {
       const { data: images } = await serviceClient
         .from('wholesale_product_images')
         .select('*')
         .in('product_id', productIds)
         .order('display_order', { ascending: true });
-      
+
       productImages = images || [];
     }
 
     // Map images to products and format response
-    const productsWithImages = (products || []).map(product => ({
+    const productsWithImages = (products || []).map((product) => ({
       ...product,
-      images: productImages.filter(img => img.product_id === product.id),
+      images: productImages.filter((img) => img.product_id === product.id),
     }));
 
     const totalPages = Math.ceil((count || 0) / limit);
@@ -1695,7 +1972,7 @@ export class ProductsService {
     }
 
     // Get primary images for matching products
-    const productIds = (products || []).map(p => p.id);
+    const productIds = (products || []).map((p) => p.id);
     let productImages: any[] = [];
 
     if (productIds.length > 0) {
@@ -1725,8 +2002,8 @@ export class ProductsService {
       .limit(3);
 
     // Map images to products
-    const productSuggestions = (products || []).map(product => {
-      const image = productImages.find(img => img.product_id === product.id);
+    const productSuggestions = (products || []).map((product) => {
+      const image = productImages.find((img) => img.product_id === product.id);
       return {
         type: 'product' as const,
         id: product.id,
@@ -1738,14 +2015,14 @@ export class ProductsService {
       };
     });
 
-    const categorySuggestions = (categories || []).map(cat => ({
+    const categorySuggestions = (categories || []).map((cat) => ({
       type: 'category' as const,
       id: cat.id,
       name: cat.name,
       slug: cat.slug,
     }));
 
-    const brandSuggestions = (brands || []).map(brand => ({
+    const brandSuggestions = (brands || []).map((brand) => ({
       type: 'brand' as const,
       id: brand.id,
       name: brand.display_name,
@@ -1787,10 +2064,12 @@ export class ProductsService {
     if (userId) {
       const { data: ownedProduct, error: ownedError } = await serviceClient
         .from('wholesale_products')
-        .select(`
+        .select(
+          `
           *,
           wholesale_brands!inner(user_id, status)
-        `)
+        `,
+        )
         .eq('slug', slug)
         .eq('wholesale_brands.user_id', userId)
         .maybeSingle();
@@ -1832,7 +2111,7 @@ export class ProductsService {
       .order('display_order', { ascending: true });
 
     // Get pack variations, stock matrix, and fixed quantities for each pack size
-    const packSizeIds = (packSizes || []).map(p => p.id);
+    const packSizeIds = (packSizes || []).map((p) => p.id);
     let packVariations: any[] = [];
     let stockMatrix: any[] = [];
     let fixedQuantities: any[] = [];
@@ -1862,21 +2141,27 @@ export class ProductsService {
     }
 
     // Map pack variations, stock matrix, and fixed quantities to pack sizes
-    const packSizesWithDetails = (packSizes || []).map(pack => ({
+    const packSizesWithDetails = (packSizes || []).map((pack) => ({
       ...pack,
-      variations: packVariations.filter(v => v.pack_size_id === pack.id),
+      variations: packVariations.filter((v) => v.pack_size_id === pack.id),
       stockMatrix: stockMatrix
-        .filter(s => s.pack_size_id === pack.id)
-        .reduce((acc, item) => {
-          acc[item.combination_key] = item.stock_quantity;
-          return acc;
-        }, {} as Record<string, number>),
+        .filter((s) => s.pack_size_id === pack.id)
+        .reduce(
+          (acc, item) => {
+            acc[item.combination_key] = item.stock_quantity;
+            return acc;
+          },
+          {} as Record<string, number>,
+        ),
       fixedQuantities: fixedQuantities
-        .filter(f => f.pack_size_id === pack.id)
-        .reduce((acc, item) => {
-          acc[item.combination_key] = item.fixed_quantity;
-          return acc;
-        }, {} as Record<string, number>),
+        .filter((f) => f.pack_size_id === pack.id)
+        .reduce(
+          (acc, item) => {
+            acc[item.combination_key] = item.fixed_quantity;
+            return acc;
+          },
+          {} as Record<string, number>,
+        ),
     }));
 
     return {
@@ -1887,4 +2172,3 @@ export class ProductsService {
     };
   }
 }
-

@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
@@ -25,7 +29,9 @@ export class CategoriesService {
     const { data, error } = await query;
 
     if (error) {
-      throw new BadRequestException(`Failed to fetch categories: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to fetch categories: ${error.message}`,
+      );
     }
 
     return (data || []).map((cat: any) => ({
@@ -54,7 +60,9 @@ export class CategoriesService {
       if (error.code === 'PGRST116') {
         throw new NotFoundException('Category not found');
       }
-      throw new BadRequestException(`Failed to fetch category: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to fetch category: ${error.message}`,
+      );
     }
 
     // Fetch subcategories for this category
@@ -121,7 +129,9 @@ export class CategoriesService {
       .single();
 
     if (error) {
-      throw new BadRequestException(`Failed to create category: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to create category: ${error.message}`,
+      );
     }
 
     return {
@@ -137,7 +147,10 @@ export class CategoriesService {
     };
   }
 
-  async updateCategory(categoryId: string, updateCategoryDto: UpdateCategoryDto) {
+  async updateCategory(
+    categoryId: string,
+    updateCategoryDto: UpdateCategoryDto,
+  ) {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Check if category exists
@@ -161,17 +174,25 @@ export class CategoriesService {
         .maybeSingle();
 
       if (existingSlug) {
-        throw new BadRequestException('A category with this slug already exists');
+        throw new BadRequestException(
+          'A category with this slug already exists',
+        );
       }
     }
 
     const updateData: any = {};
-    if (updateCategoryDto.name !== undefined) updateData.name = updateCategoryDto.name;
-    if (updateCategoryDto.slug !== undefined) updateData.slug = updateCategoryDto.slug;
-    if (updateCategoryDto.description !== undefined) updateData.description = updateCategoryDto.description;
-    if (updateCategoryDto.imageUrl !== undefined) updateData.image_url = updateCategoryDto.imageUrl;
-    if (updateCategoryDto.isActive !== undefined) updateData.is_active = updateCategoryDto.isActive;
-    if (updateCategoryDto.displayOrder !== undefined) updateData.display_order = updateCategoryDto.displayOrder;
+    if (updateCategoryDto.name !== undefined)
+      updateData.name = updateCategoryDto.name;
+    if (updateCategoryDto.slug !== undefined)
+      updateData.slug = updateCategoryDto.slug;
+    if (updateCategoryDto.description !== undefined)
+      updateData.description = updateCategoryDto.description;
+    if (updateCategoryDto.imageUrl !== undefined)
+      updateData.image_url = updateCategoryDto.imageUrl;
+    if (updateCategoryDto.isActive !== undefined)
+      updateData.is_active = updateCategoryDto.isActive;
+    if (updateCategoryDto.displayOrder !== undefined)
+      updateData.display_order = updateCategoryDto.displayOrder;
 
     const { data, error } = await serviceClient
       .from('categories')
@@ -181,7 +202,9 @@ export class CategoriesService {
       .single();
 
     if (error) {
-      throw new BadRequestException(`Failed to update category: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to update category: ${error.message}`,
+      );
     }
 
     return {
@@ -219,7 +242,7 @@ export class CategoriesService {
 
     if (productCount && productCount > 0) {
       throw new BadRequestException(
-        `Cannot delete category "${existingCategory.name}" because it is used by ${productCount} product(s). Please reassign or delete those products first.`
+        `Cannot delete category "${existingCategory.name}" because it is used by ${productCount} product(s). Please reassign or delete those products first.`,
       );
     }
 
@@ -229,7 +252,9 @@ export class CategoriesService {
       .eq('id', categoryId);
 
     if (error) {
-      throw new BadRequestException(`Failed to delete category: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to delete category: ${error.message}`,
+      );
     }
 
     return { message: 'Category deleted successfully' };
@@ -259,7 +284,9 @@ export class CategoriesService {
       .maybeSingle();
 
     if (existingSlug) {
-      throw new BadRequestException('A subcategory with this slug already exists in this category');
+      throw new BadRequestException(
+        'A subcategory with this slug already exists in this category',
+      );
     }
 
     const { data, error } = await serviceClient
@@ -277,7 +304,9 @@ export class CategoriesService {
       .single();
 
     if (error) {
-      throw new BadRequestException(`Failed to create subcategory: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to create subcategory: ${error.message}`,
+      );
     }
 
     return {
@@ -294,7 +323,10 @@ export class CategoriesService {
     };
   }
 
-  async getSubcategoriesByCategory(categoryId: string, includeInactive = false) {
+  async getSubcategoriesByCategory(
+    categoryId: string,
+    includeInactive = false,
+  ) {
     const serviceClient = this.supabaseService.getServiceClient();
 
     let query = serviceClient
@@ -311,7 +343,9 @@ export class CategoriesService {
     const { data, error } = await query;
 
     if (error) {
-      throw new BadRequestException(`Failed to fetch subcategories: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to fetch subcategories: ${error.message}`,
+      );
     }
 
     return (data || []).map((sub: any) => ({
@@ -328,7 +362,10 @@ export class CategoriesService {
     }));
   }
 
-  async updateSubcategory(subcategoryId: string, updateSubcategoryDto: UpdateSubcategoryDto) {
+  async updateSubcategory(
+    subcategoryId: string,
+    updateSubcategoryDto: UpdateSubcategoryDto,
+  ) {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Check if subcategory exists
@@ -353,17 +390,25 @@ export class CategoriesService {
         .maybeSingle();
 
       if (existingSlug) {
-        throw new BadRequestException('A subcategory with this slug already exists in this category');
+        throw new BadRequestException(
+          'A subcategory with this slug already exists in this category',
+        );
       }
     }
 
     const updateData: any = {};
-    if (updateSubcategoryDto.name !== undefined) updateData.name = updateSubcategoryDto.name;
-    if (updateSubcategoryDto.slug !== undefined) updateData.slug = updateSubcategoryDto.slug;
-    if (updateSubcategoryDto.description !== undefined) updateData.description = updateSubcategoryDto.description;
-    if (updateSubcategoryDto.imageUrl !== undefined) updateData.image_url = updateSubcategoryDto.imageUrl;
-    if (updateSubcategoryDto.isActive !== undefined) updateData.is_active = updateSubcategoryDto.isActive;
-    if (updateSubcategoryDto.displayOrder !== undefined) updateData.display_order = updateSubcategoryDto.displayOrder;
+    if (updateSubcategoryDto.name !== undefined)
+      updateData.name = updateSubcategoryDto.name;
+    if (updateSubcategoryDto.slug !== undefined)
+      updateData.slug = updateSubcategoryDto.slug;
+    if (updateSubcategoryDto.description !== undefined)
+      updateData.description = updateSubcategoryDto.description;
+    if (updateSubcategoryDto.imageUrl !== undefined)
+      updateData.image_url = updateSubcategoryDto.imageUrl;
+    if (updateSubcategoryDto.isActive !== undefined)
+      updateData.is_active = updateSubcategoryDto.isActive;
+    if (updateSubcategoryDto.displayOrder !== undefined)
+      updateData.display_order = updateSubcategoryDto.displayOrder;
 
     const { data, error } = await serviceClient
       .from('subcategories')
@@ -373,7 +418,9 @@ export class CategoriesService {
       .single();
 
     if (error) {
-      throw new BadRequestException(`Failed to update subcategory: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to update subcategory: ${error.message}`,
+      );
     }
 
     return {
@@ -412,7 +459,7 @@ export class CategoriesService {
 
     if (productCount && productCount > 0) {
       throw new BadRequestException(
-        `Cannot delete subcategory "${existingSub.name}" because it is used by ${productCount} product(s). Please reassign or delete those products first.`
+        `Cannot delete subcategory "${existingSub.name}" because it is used by ${productCount} product(s). Please reassign or delete those products first.`,
       );
     }
 
@@ -422,7 +469,9 @@ export class CategoriesService {
       .eq('id', subcategoryId);
 
     if (error) {
-      throw new BadRequestException(`Failed to delete subcategory: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to delete subcategory: ${error.message}`,
+      );
     }
 
     return { message: 'Subcategory deleted successfully' };
