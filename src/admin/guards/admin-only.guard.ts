@@ -1,4 +1,9 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { SupabaseService } from '../../supabase/supabase.service';
@@ -12,10 +17,10 @@ export class AdminOnlyGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const isAdminOnlyRoute = this.reflector.getAllAndOverride<boolean>(IS_ADMIN_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
+    const isAdminOnlyRoute = this.reflector.getAllAndOverride<boolean>(
+      IS_ADMIN_KEY,
+      [context.getHandler(), context.getClass()],
+    );
 
     if (!isAdminOnlyRoute) {
       return true;
@@ -36,7 +41,10 @@ export class AdminOnlyGuard implements CanActivate {
     }
 
     const userMetadata = userData.user.user_metadata || {};
-    const role = typeof userMetadata.role === 'string' ? userMetadata.role.toLowerCase() : undefined;
+    const role =
+      typeof userMetadata.role === 'string'
+        ? userMetadata.role.toLowerCase()
+        : undefined;
     const isAdmin =
       role === 'admin' ||
       userMetadata.isAdmin === true ||

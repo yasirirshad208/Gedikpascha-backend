@@ -39,12 +39,15 @@ export class AuthController {
 
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
-  async resetPassword(@Body() resetPasswordDto: ResetPasswordDto, @Headers('authorization') authHeader?: string) {
+  async resetPassword(
+    @Body() resetPasswordDto: ResetPasswordDto,
+    @Headers('authorization') authHeader?: string,
+  ) {
     // Get token from header if provided (from password reset link)
     const token = authHeader?.replace('Bearer ', '');
-    return this.authService.resetPassword({ 
-      ...resetPasswordDto, 
-      token: token || resetPasswordDto.token 
+    return this.authService.resetPassword({
+      ...resetPasswordDto,
+      token: token || resetPasswordDto.token,
     });
   }
 
@@ -73,4 +76,3 @@ export class AuthController {
     return this.authService.verifySession(token);
   }
 }
-

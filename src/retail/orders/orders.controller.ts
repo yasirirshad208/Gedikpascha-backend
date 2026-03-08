@@ -64,7 +64,10 @@ export class OrdersController {
     const user = await this.getUserFromToken(authHeader);
     const userId = user?.id;
     if (!userId) {
-      return { orders: [], pagination: { page: 1, limit: 10, total: 0, pages: 0 } };
+      return {
+        orders: [],
+        pagination: { page: 1, limit: 10, total: 0, pages: 0 },
+      };
     }
     return this.ordersService.getUserOrders(userId, page, limit);
   }

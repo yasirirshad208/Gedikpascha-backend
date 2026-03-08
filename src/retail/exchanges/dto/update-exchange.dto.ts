@@ -2,7 +2,14 @@ import { IsString, IsOptional, IsIn } from 'class-validator';
 
 export class UpdateExchangeStatusDto {
   @IsString()
-  @IsIn(['approved', 'rejected', 'cancelled', 'shipped', 'delivered', 'completed'])
+  @IsIn([
+    'approved',
+    'rejected',
+    'cancelled',
+    'shipped',
+    'delivered',
+    'completed',
+  ])
   status: string;
 
   @IsString()

@@ -17,7 +17,9 @@ export class PublicCategoriesService {
       .order('name', { ascending: true });
 
     if (catError) {
-      throw new BadRequestException(`Failed to fetch categories: ${catError.message}`);
+      throw new BadRequestException(
+        `Failed to fetch categories: ${catError.message}`,
+      );
     }
 
     // Fetch all active subcategories
@@ -29,7 +31,9 @@ export class PublicCategoriesService {
       .order('name', { ascending: true });
 
     if (subError) {
-      throw new BadRequestException(`Failed to fetch subcategories: ${subError.message}`);
+      throw new BadRequestException(
+        `Failed to fetch subcategories: ${subError.message}`,
+      );
     }
 
     // Group subcategories by category_id

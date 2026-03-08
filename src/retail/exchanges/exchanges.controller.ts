@@ -23,7 +23,7 @@ export class ExchangesController {
   constructor(
     private readonly exchangesService: ExchangesService,
     private readonly supabaseService: SupabaseService,
-  ) { }
+  ) {}
 
   private async getUserFromToken(authHeader?: string) {
     const token = authHeader?.replace('Bearer ', '');
@@ -163,7 +163,12 @@ export class ExchangesController {
     @Body('selectedInitiatorItems') selectedInitiatorItems?: any[],
   ) {
     const user = await this.getUserFromToken(authHeader);
-    return this.exchangesService.approveExchange(id, user.id, receiverAddressId, selectedInitiatorItems);
+    return this.exchangesService.approveExchange(
+      id,
+      user.id,
+      receiverAddressId,
+      selectedInitiatorItems,
+    );
   }
 
   @Patch(':id/reject')
@@ -206,6 +211,11 @@ export class ExchangesController {
     @Query('category') category?: string,
   ) {
     const user = await this.getUserFromToken(authHeader);
-    return this.exchangesService.getInitiatorProducts(id, user.id, { search, sortBy, priceRange, category });
+    return this.exchangesService.getInitiatorProducts(id, user.id, {
+      search,
+      sortBy,
+      priceRange,
+      category,
+    });
   }
 }

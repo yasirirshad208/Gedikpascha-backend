@@ -35,12 +35,16 @@ export class SupabaseService implements OnModuleInit {
       // Fallback to anon key if service key not provided (will respect RLS)
       this.supabaseServiceClient = this.supabaseClient;
     } else {
-      this.supabaseServiceClient = createClient(supabaseUrl, supabaseServiceKey, {
-        auth: {
-          autoRefreshToken: false,
-          persistSession: false,
+      this.supabaseServiceClient = createClient(
+        supabaseUrl,
+        supabaseServiceKey,
+        {
+          auth: {
+            autoRefreshToken: false,
+            persistSession: false,
+          },
         },
-      });
+      );
     }
   }
 
@@ -66,4 +70,3 @@ export class SupabaseService implements OnModuleInit {
     }
   }
 }
-

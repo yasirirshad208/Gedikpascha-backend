@@ -1,4 +1,9 @@
-import { Injectable, BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
 import { RegisterBrandDto } from './dto/register-brand';
 import { UpdateBrandDto } from './dto/update-brand';
@@ -12,25 +17,30 @@ export class BrandsService {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Normalize brand name (lowercase, no spaces)
-    const normalizedBrandName = registerBrandDto.brandName.toLowerCase().replace(/\s/g, '');
+    const normalizedBrandName = registerBrandDto.brandName
+      .toLowerCase()
+      .replace(/\s/g, '');
 
     // Check if brand name already exists (must be unique)
     // Use service client to bypass RLS for this public availability check
-    const { data: existingBrandName, error: nameCheckError } = await serviceClient
-      .from('wholesale_brands')
-      .select('id, brand_name')
-      .eq('brand_name', normalizedBrandName)
-      .maybeSingle();
+    const { data: existingBrandName, error: nameCheckError } =
+      await serviceClient
+        .from('wholesale_brands')
+        .select('id, brand_name')
+        .eq('brand_name', normalizedBrandName)
+        .maybeSingle();
 
     if (nameCheckError) {
       // Log the actual error for debugging
       throw new BadRequestException(
-        `Failed to check brand name availability: ${nameCheckError.message || 'Unknown error'}`
+        `Failed to check brand name availability: ${nameCheckError.message || 'Unknown error'}`,
       );
     }
 
     if (existingBrandName) {
-      throw new BadRequestException('Brand name is already taken. Please choose a different name.');
+      throw new BadRequestException(
+        'Brand name is already taken. Please choose a different name.',
+      );
     }
 
     // Check if user already has a brand registration
@@ -44,7 +54,7 @@ export class BrandsService {
     if (checkError) {
       // Log the actual error for debugging
       throw new BadRequestException(
-        `Failed to check existing brand registration: ${checkError.message || 'Unknown error'}`
+        `Failed to check existing brand registration: ${checkError.message || 'Unknown error'}`,
       );
     }
 
@@ -59,9 +69,13 @@ export class BrandsService {
           .eq('id', existingBrand.id);
         // Continue with registration below
       } else if (existingBrand.status === 'pending') {
-        throw new BadRequestException('You already have a brand registration pending review. Please wait for admin approval.');
+        throw new BadRequestException(
+          'You already have a brand registration pending review. Please wait for admin approval.',
+        );
       } else if (existingBrand.status === 'approved') {
-        throw new BadRequestException('You already have an approved brand registration. You cannot register another brand.');
+        throw new BadRequestException(
+          'You already have an approved brand registration. You cannot register another brand.',
+        );
       }
     }
 
@@ -91,9 +105,13 @@ export class BrandsService {
     if (error) {
       // Check if error is due to unique constraint violation
       if (error.code === '23505' || error.message?.includes('unique')) {
-        throw new BadRequestException('Brand name is already taken. Please choose a different name.');
+        throw new BadRequestException(
+          'Brand name is already taken. Please choose a different name.',
+        );
       }
-      throw new BadRequestException(error.message || 'Failed to register brand');
+      throw new BadRequestException(
+        error.message || 'Failed to register brand',
+      );
     }
 
     return {
@@ -101,7 +119,8 @@ export class BrandsService {
       brandName: data.brand_name,
       displayName: data.display_name,
       status: data.status,
-      message: 'Brand registration submitted successfully. Your brand is pending admin review.',
+      message:
+        'Brand registration submitted successfully. Your brand is pending admin review.',
     };
   }
 
@@ -142,7 +161,12 @@ export class BrandsService {
     };
   }
 
-  async getAllBrands(status?: 'pending' | 'approved' | 'rejected', page = 1, limit = 12, search?: string) {
+  async getAllBrands(
+    status?: 'pending' | 'approved' | 'rejected',
+    page = 1,
+    limit = 12,
+    search?: string,
+  ) {
     // Use service client to bypass RLS for admin operations
     const serviceClient = this.supabaseService.getServiceClient();
 
@@ -161,14 +185,16 @@ export class BrandsService {
     if (search && search.trim()) {
       const searchTerm = `%${search.trim()}%`;
       countQuery = countQuery.or(
-        `display_name.ilike.${searchTerm},brand_name.ilike.${searchTerm},contact_email.ilike.${searchTerm},description.ilike.${searchTerm}`
+        `display_name.ilike.${searchTerm},brand_name.ilike.${searchTerm},contact_email.ilike.${searchTerm},description.ilike.${searchTerm}`,
       );
     }
 
     const { count, error: countError } = await countQuery;
 
     if (countError) {
-      throw new BadRequestException(`Failed to count brands: ${countError.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to count brands: ${countError.message || 'Unknown error'}`,
+      );
     }
 
     // Fetch brands with pagination
@@ -186,14 +212,16 @@ export class BrandsService {
     if (search && search.trim()) {
       const searchTerm = `%${search.trim()}%`;
       query = query.or(
-        `display_name.ilike.${searchTerm},brand_name.ilike.${searchTerm},contact_email.ilike.${searchTerm},description.ilike.${searchTerm}`
+        `display_name.ilike.${searchTerm},brand_name.ilike.${searchTerm},contact_email.ilike.${searchTerm},description.ilike.${searchTerm}`,
       );
     }
 
     const { data, error } = await query;
 
     if (error) {
-      throw new BadRequestException(`Failed to fetch brands: ${error.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to fetch brands: ${error.message || 'Unknown error'}`,
+      );
     }
 
     // Fetch all categories to map IDs to names
@@ -250,7 +278,11 @@ export class BrandsService {
     };
   }
 
-  async updateBrandStatus(brandId: string, status: 'approved' | 'rejected', adminUserId: string) {
+  async updateBrandStatus(
+    brandId: string,
+    status: 'approved' | 'rejected',
+    adminUserId: string,
+  ) {
     // Use service client to bypass RLS for admin operations
     const serviceClient = this.supabaseService.getServiceClient();
 
@@ -279,7 +311,9 @@ export class BrandsService {
       .single();
 
     if (error) {
-      throw new BadRequestException(`Failed to update brand status: ${error.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to update brand status: ${error.message || 'Unknown error'}`,
+      );
     }
 
     return {
@@ -301,7 +335,9 @@ export class BrandsService {
       .maybeSingle();
 
     if (fetchError) {
-      throw new BadRequestException(`Failed to fetch brand: ${fetchError.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to fetch brand: ${fetchError.message || 'Unknown error'}`,
+      );
     }
 
     if (!existingBrand) {
@@ -350,7 +386,9 @@ export class BrandsService {
       .single();
 
     if (error) {
-      throw new BadRequestException(`Failed to update brand: ${error.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to update brand: ${error.message || 'Unknown error'}`,
+      );
     }
 
     return {
@@ -476,7 +514,9 @@ export class BrandsService {
       return [];
     }
 
-    const categoryIds = [...new Set(products.map((p: any) => p.category_id).filter(Boolean))];
+    const categoryIds = [
+      ...new Set(products.map((p: any) => p.category_id).filter(Boolean)),
+    ];
     if (categoryIds.length === 0) return [];
 
     const { data: categories, error: catError } = await serviceClient
@@ -511,7 +551,16 @@ export class BrandsService {
     } = {},
   ) {
     const serviceClient = this.supabaseService.getServiceClient();
-    const { filter, search, sortBy, priceRange, minOrder, category, colors, sizes } = opts;
+    const {
+      filter,
+      search,
+      sortBy,
+      priceRange,
+      minOrder,
+      category,
+      colors,
+      sizes,
+    } = opts;
 
     // Verify brand exists and is approved
     const { data: brand, error: brandError } = await serviceClient
@@ -539,7 +588,9 @@ export class BrandsService {
           .select('pack_size_id')
           .in('color', colors);
         if (packVariants && packVariants.length > 0) {
-          const packSizeIds = [...new Set(packVariants.map((v: any) => v.pack_size_id))];
+          const packSizeIds = [
+            ...new Set(packVariants.map((v: any) => v.pack_size_id)),
+          ];
           const { data: packSizes } = await serviceClient
             .from('wholesale_product_pack_sizes')
             .select('product_id')
@@ -559,7 +610,9 @@ export class BrandsService {
           .select('pack_size_id')
           .in('size', sizes);
         if (packVariants && packVariants.length > 0) {
-          const packSizeIds = [...new Set(packVariants.map((v: any) => v.pack_size_id))];
+          const packSizeIds = [
+            ...new Set(packVariants.map((v: any) => v.pack_size_id)),
+          ];
           const { data: packSizes } = await serviceClient
             .from('wholesale_product_pack_sizes')
             .select('product_id')
@@ -576,7 +629,9 @@ export class BrandsService {
 
       if (idsByColor.length > 0 && idsBySize.length > 0) {
         const colorSet = new Set(idsByColor);
-        variationProductIds = [...new Set(idsBySize)].filter((id) => colorSet.has(id));
+        variationProductIds = [...new Set(idsBySize)].filter((id) =>
+          colorSet.has(id),
+        );
       } else if (idsByColor.length > 0) {
         variationProductIds = [...new Set(idsByColor)];
       } else if (idsBySize.length > 0) {
@@ -614,7 +669,10 @@ export class BrandsService {
     // Category filter
     if (category && category !== 'all') {
       // Support both slug and UUID
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(category);
+      const isUuid =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          category,
+        );
       if (isUuid) {
         query = query.eq('category_id', category);
       } else {
@@ -684,10 +742,11 @@ export class BrandsService {
         query = query.order('created_at', { ascending: false });
     }
 
-    const { data: products, error: productsError, count } = await query.range(
-      offset,
-      offset + limit - 1,
-    );
+    const {
+      data: products,
+      error: productsError,
+      count,
+    } = await query.range(offset, offset + limit - 1);
 
     if (productsError) {
       throw new BadRequestException('Failed to fetch products');
@@ -720,8 +779,12 @@ export class BrandsService {
     }
 
     const formattedProducts = (products || []).map((product: any) => {
-      const images = productImages.filter(img => img.product_id === product.id);
-      const packSizes = productPackSizes.filter(ps => ps.product_id === product.id);
+      const images = productImages.filter(
+        (img) => img.product_id === product.id,
+      );
+      const packSizes = productPackSizes.filter(
+        (ps) => ps.product_id === product.id,
+      );
 
       return {
         id: product.id,
@@ -729,7 +792,9 @@ export class BrandsService {
         slug: product.slug,
         description: product.description,
         sku: product.sku,
-        basePrice: product.wholesale_price ? parseFloat(product.wholesale_price) : 0,
+        basePrice: product.wholesale_price
+          ? parseFloat(product.wholesale_price)
+          : 0,
         minOrderQuantity: product.min_order_quantity,
         status: product.status,
         sale_percentage: product.sale_percentage,
@@ -763,4 +828,3 @@ export class BrandsService {
     };
   }
 }
-

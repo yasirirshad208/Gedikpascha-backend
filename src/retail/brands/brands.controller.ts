@@ -37,7 +37,10 @@ export class RetailBrandsController {
 
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
-  async registerBrand(@Body() registerBrandDto: RegisterRetailBrandDto, @Headers('authorization') authHeader?: string) {
+  async registerBrand(
+    @Body() registerBrandDto: RegisterRetailBrandDto,
+    @Headers('authorization') authHeader?: string,
+  ) {
     const token = authHeader?.replace('Bearer ', '');
     if (!token) {
       throw new UnauthorizedException('Authentication required');
@@ -73,7 +76,10 @@ export class RetailBrandsController {
 
   @Put('my-brand')
   @HttpCode(HttpStatus.OK)
-  async updateMyBrand(@Body() updateBrandDto: UpdateRetailBrandDto, @Headers('authorization') authHeader?: string) {
+  async updateMyBrand(
+    @Body() updateBrandDto: UpdateRetailBrandDto,
+    @Headers('authorization') authHeader?: string,
+  ) {
     const token = authHeader?.replace('Bearer ', '');
     if (!token) {
       throw new UnauthorizedException('Authentication required');
@@ -138,24 +144,33 @@ export class RetailBrandsController {
     const token = authHeader?.replace('Bearer ', '');
     const supabase = this.supabaseService.getClient();
     const { data: userData } = await supabase.auth.getUser(token || '');
-    
-    return this.brandsService.updateBrandStatus(brandId, body.status, userData?.user?.id || '', body.rejectionReason);
+
+    return this.brandsService.updateBrandStatus(
+      brandId,
+      body.status,
+      userData?.user?.id || '',
+      body.rejectionReason,
+    );
   }
 
   @Post('my-brand/upload-image')
   @HttpCode(HttpStatus.OK)
-  @UseInterceptors(FileInterceptor('image', {
-    limits: {
-      fileSize: 50 * 1024 * 1024, // 50MB limit
-    },
-  }))
+  @UseInterceptors(
+    FileInterceptor('image', {
+      limits: {
+        fileSize: 50 * 1024 * 1024, // 50MB limit
+      },
+    }),
+  )
   async uploadBrandImage(
     @UploadedFile() file: Express.Multer.File | undefined,
     @Headers('authorization') authHeader?: string,
     @Req() req?: Request,
   ) {
     if (!file) {
-      throw new BadRequestException('No file provided. Please select an image file and try again.');
+      throw new BadRequestException(
+        'No file provided. Please select an image file and try again.',
+      );
     }
 
     const token = authHeader?.replace('Bearer ', '');
@@ -171,12 +186,20 @@ export class RetailBrandsController {
     }
 
     // Get imageType from FormData body (parsed by multer)
-    const imageType: 'logo' | 'cover' = req?.body?.imageType === 'cover' ? 'cover' : 'logo';
-    
-    const imageUrl = await this.brandsUploadService.uploadImage(userData.user.id, file, imageType);
+    const imageType: 'logo' | 'cover' =
+      req?.body?.imageType === 'cover' ? 'cover' : 'logo';
+
+    const imageUrl = await this.brandsUploadService.uploadImage(
+      userData.user.id,
+      file,
+      imageType,
+    );
 
     // Update brand with new image URL
-    const updateData = imageType === 'logo' ? { logoUrl: imageUrl } : { coverImageUrl: imageUrl };
+    const updateData =
+      imageType === 'logo'
+        ? { logoUrl: imageUrl }
+        : { coverImageUrl: imageUrl };
     await this.brandsService.updateBrand(userData.user.id, updateData);
 
     return { url: imageUrl };

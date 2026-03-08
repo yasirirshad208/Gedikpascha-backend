@@ -1,9 +1,13 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
 
 @Injectable()
 export class RetailProductsService {
-  constructor(private readonly supabaseService: SupabaseService) { }
+  constructor(private readonly supabaseService: SupabaseService) {}
 
   async getBrandCategories(brandId: string) {
     const supabase = this.supabaseService.getServiceClient();
@@ -20,7 +24,9 @@ export class RetailProductsService {
       return [];
     }
 
-    const categoryIds = [...new Set(products.map((p: any) => p.category_id).filter(Boolean))];
+    const categoryIds = [
+      ...new Set(products.map((p: any) => p.category_id).filter(Boolean)),
+    ];
     if (categoryIds.length === 0) return [];
 
     const { data: categories, error: catError } = await supabase
@@ -79,7 +85,7 @@ export class RetailProductsService {
     if (search && search.trim()) {
       const searchTerm = `%${search.trim()}%`;
       query = query.or(
-        `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`
+        `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`,
       );
     }
 
@@ -99,7 +105,11 @@ export class RetailProductsService {
     return products || [];
   }
 
-  async toggleExchangeable(productId: string, userId: string, isExchangeable: boolean) {
+  async toggleExchangeable(
+    productId: string,
+    userId: string,
+    isExchangeable: boolean,
+  ) {
     const supabase = this.supabaseService.getServiceClient();
 
     // Get user's retail brand
@@ -163,7 +173,9 @@ export class RetailProductsService {
       .is('deleted_at', null);
 
     if (updateError) {
-      throw new BadRequestException('Failed to update all products exchangeable status');
+      throw new BadRequestException(
+        'Failed to update all products exchangeable status',
+      );
     }
 
     return { success: true, count: 'all' };
@@ -212,8 +224,13 @@ export class RetailProductsService {
         .eq('id', product.source_wholesale_product_id)
         .single();
 
-      if (wholesaleProduct?.retail_price && parseFloat(wholesaleProduct.retail_price) > 0) {
-        product.recommended_retail_price = parseFloat(wholesaleProduct.retail_price);
+      if (
+        wholesaleProduct?.retail_price &&
+        parseFloat(wholesaleProduct.retail_price) > 0
+      ) {
+        product.recommended_retail_price = parseFloat(
+          wholesaleProduct.retail_price,
+        );
       }
     }
 
@@ -276,14 +293,18 @@ export class RetailProductsService {
         throw new BadRequestException('Retail price must be greater than 0');
       }
       if (updateData.retailPrice < existingProduct.cost_price) {
-        throw new BadRequestException('Retail price cannot be less than cost price');
+        throw new BadRequestException(
+          'Retail price cannot be less than cost price',
+        );
       }
     }
 
     // Validate sale percentage if provided
     if (updateData.salePercentage !== undefined) {
       if (updateData.salePercentage < 0 || updateData.salePercentage > 100) {
-        throw new BadRequestException('Sale percentage must be between 0 and 100');
+        throw new BadRequestException(
+          'Sale percentage must be between 0 and 100',
+        );
       }
     }
 
@@ -300,15 +321,20 @@ export class RetailProductsService {
         throw new BadRequestException('Preserved quantity cannot be negative');
       }
       if (updateData.preservedQuantity > existingProduct.stock_quantity) {
-        throw new BadRequestException('Preserved quantity cannot exceed total stock quantity');
+        throw new BadRequestException(
+          'Preserved quantity cannot exceed total stock quantity',
+        );
       }
     }
 
     // Validate status change
     if (updateData.status === 'active') {
-      const retailPrice = updateData.retailPrice ?? existingProduct.retail_price;
+      const retailPrice =
+        updateData.retailPrice ?? existingProduct.retail_price;
       if (!retailPrice) {
-        throw new BadRequestException('Cannot set status to active without setting retail price');
+        throw new BadRequestException(
+          'Cannot set status to active without setting retail price',
+        );
       }
     }
 
@@ -358,7 +384,9 @@ export class RetailProductsService {
       .single();
 
     if (updateError) {
-      throw new BadRequestException(`Failed to update product: ${updateError.message}`);
+      throw new BadRequestException(
+        `Failed to update product: ${updateError.message}`,
+      );
     }
 
     return updatedProduct;
@@ -384,11 +412,13 @@ export class RetailProductsService {
     // Build query - only active products with approved brands, include images
     let query = supabase
       .from('retail_products')
-      .select(`
+      .select(
+        `
         *,
         retail_brands!inner(id, display_name, logo_url, status),
         retail_product_images(id, image_url, display_order, is_primary)
-      `)
+      `,
+      )
       .eq('status', 'active')
       .eq('retail_brands.status', 'approved')
       .is('deleted_at', null);
@@ -495,7 +525,7 @@ export class RetailProductsService {
     if (search && search.trim()) {
       const searchTerm = `%${search.trim()}%`;
       query = query.or(
-        `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`
+        `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`,
       );
     }
 
@@ -511,19 +541,27 @@ export class RetailProductsService {
       const idsBySize: string[] = [];
 
       if (colors?.trim()) {
-        const colorList = colors.split(',').map((c) => c.trim()).filter(Boolean);
+        const colorList = colors
+          .split(',')
+          .map((c) => c.trim())
+          .filter(Boolean);
         if (colorList.length > 0) {
           const { data: colorProducts } = await supabase
             .from('retail_product_variations')
             .select('product_id')
             .in('name', colorList)
             .or('variation_type.eq.Color,variation_type.eq.color');
-          idsByColor.push(...(colorProducts || []).map((p: any) => p.product_id));
+          idsByColor.push(
+            ...(colorProducts || []).map((p: any) => p.product_id),
+          );
         }
       }
 
       if (sizes?.trim()) {
-        const sizeList = sizes.split(',').map((s) => s.trim()).filter(Boolean);
+        const sizeList = sizes
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
         if (sizeList.length > 0) {
           const { data: sizeProducts } = await supabase
             .from('retail_product_variations')
@@ -536,7 +574,9 @@ export class RetailProductsService {
 
       if (idsByColor.length > 0 && idsBySize.length > 0) {
         const colorSet = new Set(idsByColor);
-        variationProductIds = [...new Set(idsBySize)].filter((id) => colorSet.has(id));
+        variationProductIds = [...new Set(idsBySize)].filter((id) =>
+          colorSet.has(id),
+        );
       } else if (idsByColor.length > 0) {
         variationProductIds = [...new Set(idsByColor)];
       } else if (idsBySize.length > 0) {
@@ -547,7 +587,10 @@ export class RetailProductsService {
         query = query.in('id', variationProductIds);
       } else {
         // Colors/sizes were requested but no matching products found
-        return { products: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+        return {
+          products: [],
+          pagination: { page, limit, total: 0, totalPages: 0 },
+        };
       }
     }
 
@@ -562,22 +605,36 @@ export class RetailProductsService {
     }
 
     if (parsedDynamicFilters && Object.keys(parsedDynamicFilters).length > 0) {
-      for (const [filterKey, filterValues] of Object.entries(parsedDynamicFilters)) {
+      for (const [filterKey, filterValues] of Object.entries(
+        parsedDynamicFilters,
+      )) {
         if (filterValues && filterValues.length > 0) {
           // Convert filterKey from camelCase to PascalCase for the JSON path
-          const jsonPath = filterKey.charAt(0).toUpperCase() + filterKey.slice(1);
+          const jsonPath =
+            filterKey.charAt(0).toUpperCase() + filterKey.slice(1);
 
           // Array fields stored as JSON arrays in product_details
           const arrayFields = [
-            'Features', 'Ingredients', 'Connectivity', 'SpecialFeatures',
-            'Dietary', 'Allergens', 'Usage', 'SafetyStandards', 'SpecialNeeds',
-            'Certifications', 'SpecialDiet', 'SpecialEdition',
+            'Features',
+            'Ingredients',
+            'Connectivity',
+            'SpecialFeatures',
+            'Dietary',
+            'Allergens',
+            'Usage',
+            'SafetyStandards',
+            'SpecialNeeds',
+            'Certifications',
+            'SpecialDiet',
+            'SpecialEdition',
           ];
 
           if (arrayFields.includes(jsonPath)) {
             // For array fields, use contains (AND logic)
             for (const value of filterValues) {
-              query = query.contains('product_details', { [jsonPath]: [value] });
+              query = query.contains('product_details', {
+                [jsonPath]: [value],
+              });
             }
           } else {
             // For single-value fields, use OR logic
@@ -672,10 +729,14 @@ export class RetailProductsService {
           countQuery = countQuery.lt('retail_price', 50);
           break;
         case '50_100':
-          countQuery = countQuery.gte('retail_price', 50).lte('retail_price', 100);
+          countQuery = countQuery
+            .gte('retail_price', 50)
+            .lte('retail_price', 100);
           break;
         case '100_200':
-          countQuery = countQuery.gte('retail_price', 100).lte('retail_price', 200);
+          countQuery = countQuery
+            .gte('retail_price', 100)
+            .lte('retail_price', 200);
           break;
         case 'over_200':
           countQuery = countQuery.gt('retail_price', 200);
@@ -687,7 +748,7 @@ export class RetailProductsService {
     if (search && search.trim()) {
       const searchTerm = `%${search.trim()}%`;
       countQuery = countQuery.or(
-        `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`
+        `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`,
       );
     }
 
@@ -703,18 +764,32 @@ export class RetailProductsService {
 
     // Apply dynamic filters to count query
     if (parsedDynamicFilters && Object.keys(parsedDynamicFilters).length > 0) {
-      for (const [filterKey, filterValues] of Object.entries(parsedDynamicFilters)) {
+      for (const [filterKey, filterValues] of Object.entries(
+        parsedDynamicFilters,
+      )) {
         if (filterValues && filterValues.length > 0) {
-          const jsonPath = filterKey.charAt(0).toUpperCase() + filterKey.slice(1);
+          const jsonPath =
+            filterKey.charAt(0).toUpperCase() + filterKey.slice(1);
           const arrayFields = [
-            'Features', 'Ingredients', 'Connectivity', 'SpecialFeatures',
-            'Dietary', 'Allergens', 'Usage', 'SafetyStandards', 'SpecialNeeds',
-            'Certifications', 'SpecialDiet', 'SpecialEdition',
+            'Features',
+            'Ingredients',
+            'Connectivity',
+            'SpecialFeatures',
+            'Dietary',
+            'Allergens',
+            'Usage',
+            'SafetyStandards',
+            'SpecialNeeds',
+            'Certifications',
+            'SpecialDiet',
+            'SpecialEdition',
           ];
 
           if (arrayFields.includes(jsonPath)) {
             for (const value of filterValues) {
-              countQuery = countQuery.contains('product_details', { [jsonPath]: [value] });
+              countQuery = countQuery.contains('product_details', {
+                [jsonPath]: [value],
+              });
             }
           } else {
             const conditions = filterValues
@@ -730,10 +805,18 @@ export class RetailProductsService {
 
     // Check if error is due to missing category_id or subcategory_id column
     // If so, skip category filtering and return all products
-    if (countError && countError.code === '42703' &&
-      (countError.message?.includes('category_id') || countError.message?.includes('subcategory_id'))) {
-      console.warn('Category filtering not available - category_id/subcategory_id columns do not exist.');
-      console.warn('Please run migration: backend/database/migrations/retail/add_category_fields_to_retail_products.sql');
+    if (
+      countError &&
+      countError.code === '42703' &&
+      (countError.message?.includes('category_id') ||
+        countError.message?.includes('subcategory_id'))
+    ) {
+      console.warn(
+        'Category filtering not available - category_id/subcategory_id columns do not exist.',
+      );
+      console.warn(
+        'Please run migration: backend/database/migrations/retail/add_category_fields_to_retail_products.sql',
+      );
       console.warn('Continuing without category filter...');
 
       // Rebuild queries without category filters
@@ -750,11 +833,13 @@ export class RetailProductsService {
       // Rebuild main query without category filters
       query = supabase
         .from('retail_products')
-        .select(`
+        .select(
+          `
           *,
           retail_brands!inner(id, display_name, logo_url, status),
           retail_product_images(id, image_url, display_order, is_primary)
-        `)
+        `,
+        )
         .eq('status', 'active')
         .eq('retail_brands.status', 'approved')
         .is('deleted_at', null);
@@ -781,11 +866,15 @@ export class RetailProductsService {
             break;
           case '50_100':
             query = query.gte('retail_price', 50).lte('retail_price', 100);
-            countQuery = countQuery.gte('retail_price', 50).lte('retail_price', 100);
+            countQuery = countQuery
+              .gte('retail_price', 50)
+              .lte('retail_price', 100);
             break;
           case '100_200':
             query = query.gte('retail_price', 100).lte('retail_price', 200);
-            countQuery = countQuery.gte('retail_price', 100).lte('retail_price', 200);
+            countQuery = countQuery
+              .gte('retail_price', 100)
+              .lte('retail_price', 200);
             break;
           case 'over_200':
             query = query.gt('retail_price', 200);
@@ -796,8 +885,12 @@ export class RetailProductsService {
 
       if (search && search.trim()) {
         const searchTerm = `%${search.trim()}%`;
-        query = query.or(`name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`);
-        countQuery = countQuery.or(`name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`);
+        query = query.or(
+          `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`,
+        );
+        countQuery = countQuery.or(
+          `name.ilike.${searchTerm},sku.ilike.${searchTerm},description.ilike.${searchTerm}`,
+        );
       }
 
       // Apply sorting
@@ -821,7 +914,10 @@ export class RetailProductsService {
       // Re-execute count query
       const { count: retryCount, error: retryCountError } = await countQuery;
       if (retryCountError) {
-        console.error('Error counting public retail products:', retryCountError);
+        console.error(
+          'Error counting public retail products:',
+          retryCountError,
+        );
       }
 
       // Apply pagination
@@ -870,10 +966,17 @@ export class RetailProductsService {
 
     if (error) {
       // Check if error is due to missing category_id column
-      if (error.code === '42703' &&
-        (error.message?.includes('category_id') || error.message?.includes('subcategory_id'))) {
-        console.warn('Category filtering not available - category_id/subcategory_id columns do not exist.');
-        console.warn('Please run migration: backend/database/migrations/retail/add_category_fields_to_retail_products.sql');
+      if (
+        error.code === '42703' &&
+        (error.message?.includes('category_id') ||
+          error.message?.includes('subcategory_id'))
+      ) {
+        console.warn(
+          'Category filtering not available - category_id/subcategory_id columns do not exist.',
+        );
+        console.warn(
+          'Please run migration: backend/database/migrations/retail/add_category_fields_to_retail_products.sql',
+        );
         console.warn('Returning empty results for category filter...');
 
         return {
@@ -917,13 +1020,15 @@ export class RetailProductsService {
     // Get product by slug with all related data
     const { data: products, error } = await supabase
       .from('retail_products')
-      .select(`
+      .select(
+        `
         *,
         retail_brands!inner(id, brand_name, display_name, logo_url, status, description),
         retail_product_images(id, image_url, display_order, is_primary),
         retail_product_variations(id, variation_type, name, value, is_available, display_order),
         retail_product_inventory(id, combination_key, stock_quantity)
-      `)
+      `,
+      )
       .eq('slug', slug)
       .eq('status', 'active')
       .eq('retail_brands.status', 'approved')
@@ -937,7 +1042,10 @@ export class RetailProductsService {
 
     // Aggregate inventory by combination_key (multiple rows may exist per key)
     const rawInventory = product.retail_product_inventory || [];
-    const inventoryMap = new Map<string, { id: string; combination_key: string; stock_quantity: number }>();
+    const inventoryMap = new Map<
+      string,
+      { id: string; combination_key: string; stock_quantity: number }
+    >();
     for (const row of rawInventory) {
       const existing = inventoryMap.get(row.combination_key);
       if (existing) {
@@ -955,7 +1063,8 @@ export class RetailProductsService {
     // Get related products (same brand)
     const { data: relatedProducts } = await supabase
       .from('retail_products')
-      .select(`
+      .select(
+        `
         id,
         name,
         slug,
@@ -964,7 +1073,8 @@ export class RetailProductsService {
         retail_brands!inner(display_name, status),
         retail_product_images(image_url, is_primary),
         retail_product_variations(id, variation_type, name, value, is_available, display_order)
-      `)
+      `,
+      )
       .eq('status', 'active')
       .eq('retail_brands.status', 'approved')
       .is('deleted_at', null)
@@ -990,7 +1100,8 @@ export class RetailProductsService {
       .eq('user_id', userId)
       .eq('status', 'approved')
       .single();
-    if (brandError || !retailBrand) throw new NotFoundException('Retail brand not found');
+    if (brandError || !retailBrand)
+      throw new NotFoundException('Retail brand not found');
     // Check product ownership
     const { data: product, error: prodError } = await supabase
       .from('retail_products')
@@ -1010,7 +1121,8 @@ export class RetailProductsService {
     const rows = inventory || [];
 
     // Check if we need to auto-split: inventory is only "default" but product has variations
-    const allDefault = rows.length > 0 && rows.every(r => r.combination_key === 'default');
+    const allDefault =
+      rows.length > 0 && rows.every((r) => r.combination_key === 'default');
     if (allDefault) {
       // Fetch the product's variations
       const { data: variations } = await supabase
@@ -1021,12 +1133,18 @@ export class RetailProductsService {
 
       if (variations && variations.length > 0) {
         // Build combination keys from variations
-        const combinationKeys = this.buildCombinationKeysFromVariations(variations);
+        const combinationKeys =
+          this.buildCombinationKeysFromVariations(variations);
 
         if (combinationKeys.length > 0) {
           // Calculate total stock from all default rows
-          const totalStock = rows.reduce((sum, r) => sum + r.stock_quantity + r.preserved_quantity, 0);
-          const stockPerCombination = Math.floor(totalStock / combinationKeys.length);
+          const totalStock = rows.reduce(
+            (sum, r) => sum + r.stock_quantity + r.preserved_quantity,
+            0,
+          );
+          const stockPerCombination = Math.floor(
+            totalStock / combinationKeys.length,
+          );
           const remainder = totalStock % combinationKeys.length;
 
           // Pick one default row to get source_wholesale_order_item_id
@@ -1060,7 +1178,7 @@ export class RetailProductsService {
           }
 
           // Return the newly created rows
-          return newRows.map(r => ({
+          return newRows.map((r) => ({
             combination_key: r.combination_key,
             stock_quantity: r.stock_quantity,
             preserved_quantity: r.preserved_quantity,
@@ -1071,7 +1189,15 @@ export class RetailProductsService {
     }
 
     // Aggregate by combination_key (multiple rows can exist per key due to different order sources)
-    const aggregated = new Map<string, { combination_key: string; stock_quantity: number; preserved_quantity: number; row_count: number }>();
+    const aggregated = new Map<
+      string,
+      {
+        combination_key: string;
+        stock_quantity: number;
+        preserved_quantity: number;
+        row_count: number;
+      }
+    >();
     for (const row of rows) {
       const key = row.combination_key;
       const existing = aggregated.get(key);
@@ -1094,7 +1220,7 @@ export class RetailProductsService {
 
   // Build all combination keys from a product's variations
   private buildCombinationKeysFromVariations(
-    variations: { variation_type: string; name: string }[]
+    variations: { variation_type: string; name: string }[],
   ): string[] {
     // Group by variation_type
     const byType = new Map<string, string[]>();
@@ -1104,30 +1230,34 @@ export class RetailProductsService {
       byType.set(v.variation_type, existing);
     }
 
-    const types = Array.from(byType.keys()).sort((a, b) => a.localeCompare(b, 'en'));
+    const types = Array.from(byType.keys()).sort((a, b) =>
+      a.localeCompare(b, 'en'),
+    );
 
     // Check for combined types (e.g. "color_size")
     // If a type contains "_" and includes "color", each variation name is already a combination
-    const hasCombinedType = types.some(t => t.includes('_'));
+    const hasCombinedType = types.some((t) => t.includes('_'));
     if (hasCombinedType && types.length === 1) {
       // Single combined type - each variation name IS a combination
       const type = types[0];
       const names = byType.get(type) || [];
-      return names.map(name => `${type}:${name}`);
+      return names.map((name) => `${type}:${name}`);
     }
 
     // Multiple separate types - create cross-product
     // e.g. color: [Black, White], size: [S, M, L] => color:Black|size:S, color:Black|size:M, ...
-    const groups = types.map(type => ({
+    const groups = types.map((type) => ({
       type,
       names: byType.get(type) || [],
     }));
 
     // Cross-product helper
-    const crossProduct = (groups: { type: string; names: string[] }[]): string[] => {
+    const crossProduct = (
+      groups: { type: string; names: string[] }[],
+    ): string[] => {
       if (groups.length === 0) return [];
       if (groups.length === 1) {
-        return groups[0].names.map(name => `${groups[0].type}:${name}`);
+        return groups[0].names.map((name) => `${groups[0].type}:${name}`);
       }
 
       const [first, ...rest] = groups;
@@ -1149,7 +1279,7 @@ export class RetailProductsService {
   async updateInventoryPreservedQuantities(
     productId: string,
     userId: string,
-    updates: { combinationKey: string; preservedQuantity: number }[]
+    updates: { combinationKey: string; preservedQuantity: number }[],
   ) {
     const supabase = this.supabaseService.getServiceClient();
     // Get user's retail brand
@@ -1188,18 +1318,28 @@ export class RetailProductsService {
         .order('created_at', { ascending: true });
 
       if (rowError || !rows || rows.length === 0) {
-        throw new NotFoundException(`Inventory not found for combination: ${update.combinationKey}`);
+        throw new NotFoundException(
+          `Inventory not found for combination: ${update.combinationKey}`,
+        );
       }
 
       // Calculate current aggregated totals
-      const currentTotalStock = rows.reduce((sum, r) => sum + r.stock_quantity, 0);
-      const currentTotalPreserved = rows.reduce((sum, r) => sum + r.preserved_quantity, 0);
+      const currentTotalStock = rows.reduce(
+        (sum, r) => sum + r.stock_quantity,
+        0,
+      );
+      const currentTotalPreserved = rows.reduce(
+        (sum, r) => sum + r.preserved_quantity,
+        0,
+      );
       const grandTotal = currentTotalStock + currentTotalPreserved;
       const diff = update.preservedQuantity - currentTotalPreserved;
 
       // Validate: preserved cannot exceed total stock
       if (update.preservedQuantity > grandTotal) {
-        throw new BadRequestException(`Preserved quantity (${update.preservedQuantity}) exceeds total stock (${grandTotal}) for ${update.combinationKey}`);
+        throw new BadRequestException(
+          `Preserved quantity (${update.preservedQuantity}) exceeds total stock (${grandTotal}) for ${update.combinationKey}`,
+        );
       }
 
       if (diff === 0) continue; // No change

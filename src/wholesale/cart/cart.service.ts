@@ -13,7 +13,7 @@ import {
 
 @Injectable()
 export class CartService {
-  constructor(private readonly supabaseService: SupabaseService) { }
+  constructor(private readonly supabaseService: SupabaseService) {}
 
   async getCart(userId: string) {
     const serviceClient = this.supabaseService.getServiceClient();
@@ -81,9 +81,16 @@ export class CartService {
       if (item.selected_variations && packSize?.variations) {
         // Extract color from the first variation key (e.g., "color:White|size:M" → "White")
         const firstKey = Object.keys(item.selected_variations)[0];
-        console.log('[Cart Image Debug] firstKey:', firstKey, 'variations count:', (packSize.variations as any[]).length);
+        console.log(
+          '[Cart Image Debug] firstKey:',
+          firstKey,
+          'variations count:',
+          (packSize.variations as any[]).length,
+        );
         if (firstKey) {
-          const colorPart = firstKey.split('|').find((p: string) => p.startsWith('color:'));
+          const colorPart = firstKey
+            .split('|')
+            .find((p: string) => p.startsWith('color:'));
           if (colorPart) {
             const colorName = colorPart.split(':')[1];
             console.log('[Cart Image Debug] colorName:', colorName);
@@ -91,15 +98,42 @@ export class CartService {
             const matchingVariation = (packSize.variations as any[]).find(
               (v: any) => v.color === colorName,
             );
-            console.log('[Cart Image Debug] matchingVariation:', matchingVariation ? { color: matchingVariation.color, image_index: matchingVariation.image_index, image_indices: matchingVariation.image_indices } : 'NOT FOUND');
-            console.log('[Cart Image Debug] all variation colors:', (packSize.variations as any[]).map((v: any) => ({ color: v.color, variation_type: v.variation_type, name: v.name })));
+            console.log(
+              '[Cart Image Debug] matchingVariation:',
+              matchingVariation
+                ? {
+                    color: matchingVariation.color,
+                    image_index: matchingVariation.image_index,
+                    image_indices: matchingVariation.image_indices,
+                  }
+                : 'NOT FOUND',
+            );
+            console.log(
+              '[Cart Image Debug] all variation colors:',
+              (packSize.variations as any[]).map((v: any) => ({
+                color: v.color,
+                variation_type: v.variation_type,
+                name: v.name,
+              })),
+            );
             if (matchingVariation) {
               const imgIndices = matchingVariation.image_indices;
-              const imgIdx = (imgIndices && imgIndices.length > 0) ? imgIndices[0] : matchingVariation.image_index;
-              console.log('[Cart Image Debug] imgIdx:', imgIdx, 'sortedImages count:', sortedImages.length);
+              const imgIdx =
+                imgIndices && imgIndices.length > 0
+                  ? imgIndices[0]
+                  : matchingVariation.image_index;
+              console.log(
+                '[Cart Image Debug] imgIdx:',
+                imgIdx,
+                'sortedImages count:',
+                sortedImages.length,
+              );
               if (imgIdx != null && sortedImages[imgIdx]) {
                 displayImage = sortedImages[imgIdx].image_url;
-                console.log('[Cart Image Debug] RESOLVED displayImage:', displayImage);
+                console.log(
+                  '[Cart Image Debug] RESOLVED displayImage:',
+                  displayImage,
+                );
               }
             }
           }
@@ -130,35 +164,35 @@ export class CartService {
         updatedAt: item.updated_at,
         product: product
           ? {
-            id: product.id,
-            name: product.name,
-            slug: product.slug,
-            wholesalePrice: product.wholesale_price,
-            salePercentage: product.sale_percentage,
-            vatRate: product.vat_rate || null,
-            status: product.status,
-            stockQuantity: product.stock_quantity,
-            isDeleted: !!product.deleted_at,
-            image: displayImage,
-            brand: product.wholesale_brand
-              ? {
-                id: product.wholesale_brand.id,
-                name: product.wholesale_brand.display_name,
-                slug: product.wholesale_brand.brand_name,
-              }
-              : null,
-          }
+              id: product.id,
+              name: product.name,
+              slug: product.slug,
+              wholesalePrice: product.wholesale_price,
+              salePercentage: product.sale_percentage,
+              vatRate: product.vat_rate || null,
+              status: product.status,
+              stockQuantity: product.stock_quantity,
+              isDeleted: !!product.deleted_at,
+              image: displayImage,
+              brand: product.wholesale_brand
+                ? {
+                    id: product.wholesale_brand.id,
+                    name: product.wholesale_brand.display_name,
+                    slug: product.wholesale_brand.brand_name,
+                  }
+                : null,
+            }
           : null,
         packSize: packSize
           ? {
-            id: packSize.id,
-            label: packSize.label,
-            quantity: packSize.quantity,
-            packPrice: packSize.pack_price,
-            unitPrice: packSize.unit_price,
-            isAvailable: packSize.is_available,
-            variations: packSize.variations || [],
-          }
+              id: packSize.id,
+              label: packSize.label,
+              quantity: packSize.quantity,
+              packPrice: packSize.pack_price,
+              unitPrice: packSize.unit_price,
+              isAvailable: packSize.is_available,
+              variations: packSize.variations || [],
+            }
           : null,
       };
     });
@@ -238,7 +272,10 @@ export class CartService {
     // When selectedVariations are provided, always create separate entries
     // (e.g., same pack with Red vs Blue should be separate cart items)
     let existingItem: any = null;
-    if (!addToCartDto.selectedVariations || Object.keys(addToCartDto.selectedVariations).length === 0) {
+    if (
+      !addToCartDto.selectedVariations ||
+      Object.keys(addToCartDto.selectedVariations).length === 0
+    ) {
       const { data } = await serviceClient
         .from('wholesale_cart')
         .select('id, quantity, selected_variations')
@@ -255,7 +292,7 @@ export class CartService {
       const newQuantity = existingItem.quantity + addToCartDto.quantity;
 
       // Merge selected variations if provided
-      let mergedVariations = existingItem.selected_variations || {};
+      const mergedVariations = existingItem.selected_variations || {};
       if (addToCartDto.selectedVariations) {
         Object.entries(addToCartDto.selectedVariations).forEach(
           ([key, qty]) => {
@@ -269,9 +306,7 @@ export class CartService {
         .update({
           quantity: newQuantity,
           selected_variations:
-            Object.keys(mergedVariations).length > 0
-              ? mergedVariations
-              : null,
+            Object.keys(mergedVariations).length > 0 ? mergedVariations : null,
           unit_price: addToCartDto.unitPrice,
           pack_price: addToCartDto.packPrice,
         })
@@ -357,11 +392,7 @@ export class CartService {
     return this.getCart(userId);
   }
 
-  async removeFromCart(
-    userId: string,
-    productId: string,
-    packSizeId?: string,
-  ) {
+  async removeFromCart(userId: string, productId: string, packSizeId?: string) {
     const serviceClient = this.supabaseService.getServiceClient();
 
     let query = serviceClient
@@ -419,7 +450,10 @@ export class CartService {
       );
     }
 
-    return { items: [], summary: { subtotal: 0, totalItems: 0, totalPieces: 0, itemCount: 0 } };
+    return {
+      items: [],
+      summary: { subtotal: 0, totalItems: 0, totalPieces: 0, itemCount: 0 },
+    };
   }
 
   async syncCart(userId: string, syncCartDto: SyncCartDto) {
@@ -455,7 +489,10 @@ export class CartService {
 
         // Check if item already exists - only merge when no variations
         let existingItem: any = null;
-        if (!item.selectedVariations || Object.keys(item.selectedVariations).length === 0) {
+        if (
+          !item.selectedVariations ||
+          Object.keys(item.selectedVariations).length === 0
+        ) {
           const { data } = await serviceClient
             .from('wholesale_cart')
             .select('id, quantity, selected_variations')

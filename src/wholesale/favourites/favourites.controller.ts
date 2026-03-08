@@ -110,7 +110,10 @@ export class FavouritesController {
     @Headers('authorization') authHeader?: string,
   ) {
     const userId = await this.getUserId(authHeader);
-    const isFavourited = await this.favouritesService.isFavourited(userId, productId);
+    const isFavourited = await this.favouritesService.isFavourited(
+      userId,
+      productId,
+    );
     return { productId, isFavourited };
   }
 

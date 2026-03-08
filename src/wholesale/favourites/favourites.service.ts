@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
 
 @Injectable()
@@ -39,7 +43,9 @@ export class FavouritesService {
       if (error.code === '23505') {
         return { message: 'Product already in favourites', isFavourited: true };
       }
-      throw new BadRequestException(`Failed to add favourite: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to add favourite: ${error.message}`,
+      );
     }
 
     return {
@@ -63,7 +69,9 @@ export class FavouritesService {
       .eq('product_id', productId);
 
     if (error) {
-      throw new BadRequestException(`Failed to remove favourite: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to remove favourite: ${error.message}`,
+      );
     }
 
     return {
@@ -114,7 +122,10 @@ export class FavouritesService {
    * Check favourite status for multiple products at once (optimized batch query)
    * Returns a Set of favourited product IDs for O(1) lookup
    */
-  async getFavouritedProductIds(userId: string, productIds: string[]): Promise<Set<string>> {
+  async getFavouritedProductIds(
+    userId: string,
+    productIds: string[],
+  ): Promise<Set<string>> {
     if (!productIds.length) return new Set();
 
     const serviceClient = this.supabaseService.getServiceClient();
@@ -130,7 +141,7 @@ export class FavouritesService {
       return new Set();
     }
 
-    return new Set(data?.map(f => f.product_id) || []);
+    return new Set(data?.map((f) => f.product_id) || []);
   }
 
   /**
@@ -147,13 +158,16 @@ export class FavouritesService {
       .eq('user_id', userId);
 
     if (countError) {
-      throw new BadRequestException(`Failed to count favourites: ${countError.message}`);
+      throw new BadRequestException(
+        `Failed to count favourites: ${countError.message}`,
+      );
     }
 
     // Get favourites with product details
     const { data: favourites, error } = await serviceClient
       .from('wholesale_favourites')
-      .select(`
+      .select(
+        `
         id,
         created_at,
         product:wholesale_products (
@@ -170,23 +184,26 @@ export class FavouritesService {
           favourites_count,
           wholesale_brand_id
         )
-      `)
+      `,
+      )
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
     if (error) {
-      throw new BadRequestException(`Failed to fetch favourites: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to fetch favourites: ${error.message}`,
+      );
     }
 
     // Get product IDs to fetch images and brand info
-    const productIds = favourites
-      ?.map((f: any) => f.product?.id)
-      .filter(Boolean) || [];
+    const productIds =
+      favourites?.map((f: any) => f.product?.id).filter(Boolean) || [];
 
-    const brandIds = favourites
-      ?.map((f: any) => f.product?.wholesale_brand_id)
-      .filter(Boolean) || [];
+    const brandIds =
+      favourites
+        ?.map((f: any) => f.product?.wholesale_brand_id)
+        .filter(Boolean) || [];
 
     // Fetch images and brands in parallel
     const [imagesResult, brandsResult] = await Promise.all([
@@ -226,7 +243,8 @@ export class FavouritesService {
         const product = favourite.product;
         const images = imagesByProduct.get(product.id) || [];
         const brand = brandsById.get(product.wholesale_brand_id);
-        const primaryImage = images.find((img: any) => img.is_primary) || images[0];
+        const primaryImage =
+          images.find((img: any) => img.is_primary) || images[0];
 
         return {
           id: favourite.id,
@@ -236,14 +254,17 @@ export class FavouritesService {
             name: product.name,
             slug: product.slug,
             description: product.description,
-            wholesalePrice: product.wholesale_price ? parseFloat(product.wholesale_price) : 0,
+            wholesalePrice: product.wholesale_price
+              ? parseFloat(product.wholesale_price)
+              : 0,
             salePercentage: product.sale_percentage || 0,
             minOrderQuantity: product.min_order_quantity,
             rating: product.rating ? parseFloat(product.rating) : 0,
             reviewCount: product.review_count || 0,
             favouritesCount: product.favourites_count || 0,
             imageUrl: primaryImage?.image_url || null,
-            brandName: brand?.display_name || brand?.brand_name || 'Unknown Brand',
+            brandName:
+              brand?.display_name || brand?.brand_name || 'Unknown Brand',
           },
           isFavourited: true,
         };
@@ -290,7 +311,9 @@ export class FavouritesService {
       .eq('user_id', userId);
 
     if (error) {
-      throw new BadRequestException(`Failed to clear favourites: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to clear favourites: ${error.message}`,
+      );
     }
 
     return { message: 'All favourites cleared' };

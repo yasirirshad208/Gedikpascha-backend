@@ -140,8 +140,7 @@ export class OrdersService {
         createOrderDto.billingAddress.addressLine2 || null;
       orderData.billing_city = createOrderDto.billingAddress.city;
       orderData.billing_state = createOrderDto.billingAddress.state || null;
-      orderData.billing_postal_code =
-        createOrderDto.billingAddress.postalCode;
+      orderData.billing_postal_code = createOrderDto.billingAddress.postalCode;
       orderData.billing_country =
         createOrderDto.billingAddress.country || 'Turkey';
     }
@@ -240,7 +239,11 @@ export class OrdersService {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    const { data: orders, error: ordersError, count } = await serviceClient
+    const {
+      data: orders,
+      error: ordersError,
+      count,
+    } = await serviceClient
       .from('retail_orders')
       .select(
         `

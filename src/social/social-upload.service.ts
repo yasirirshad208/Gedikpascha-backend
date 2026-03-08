@@ -140,7 +140,9 @@ export class SocialUploadService {
 
     if (kind === 'social_avatar') {
       if (!isImage) {
-        throw new BadRequestException('Avatar upload supports image files only');
+        throw new BadRequestException(
+          'Avatar upload supports image files only',
+        );
       }
       if (file.size > this.maxSocialAvatarBytes) {
         throw new BadRequestException('Avatar image size exceeds 8 MB');

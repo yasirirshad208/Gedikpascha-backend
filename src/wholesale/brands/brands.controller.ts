@@ -37,7 +37,10 @@ export class BrandsController {
 
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
-  async registerBrand(@Body() registerBrandDto: RegisterBrandDto, @Headers('authorization') authHeader?: string) {
+  async registerBrand(
+    @Body() registerBrandDto: RegisterBrandDto,
+    @Headers('authorization') authHeader?: string,
+  ) {
     const token = authHeader?.replace('Bearer ', '');
     if (!token) {
       throw new UnauthorizedException('Authentication required');
@@ -74,7 +77,10 @@ export class BrandsController {
 
   @Put('my-brand')
   @HttpCode(HttpStatus.OK)
-  async updateMyBrand(@Body() updateBrandDto: UpdateBrandDto, @Headers('authorization') authHeader?: string) {
+  async updateMyBrand(
+    @Body() updateBrandDto: UpdateBrandDto,
+    @Headers('authorization') authHeader?: string,
+  ) {
     const token = authHeader?.replace('Bearer ', '');
     if (!token) {
       throw new UnauthorizedException('Authentication required');
@@ -205,8 +211,12 @@ export class BrandsController {
     const token = authHeader?.replace('Bearer ', '');
     const supabase = this.supabaseService.getClient();
     const { data: userData } = await supabase.auth.getUser(token || '');
-    
-    return this.brandsService.updateBrandStatus(brandId, body.status, userData?.user?.id || '');
+
+    return this.brandsService.updateBrandStatus(
+      brandId,
+      body.status,
+      userData?.user?.id || '',
+    );
   }
 
   @Get('categories')
@@ -232,7 +242,9 @@ export class BrandsController {
 
     let query = serviceClient
       .from('categories')
-      .select('id, name, slug, description, image_url, is_active, display_order, created_at, updated_at')
+      .select(
+        'id, name, slug, description, image_url, is_active, display_order, created_at, updated_at',
+      )
       .order('display_order', { ascending: true })
       .order('name', { ascending: true });
 
@@ -243,7 +255,9 @@ export class BrandsController {
     const { data, error: fetchError } = await query;
 
     if (fetchError) {
-      throw new BadRequestException(`Failed to fetch categories: ${fetchError.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to fetch categories: ${fetchError.message || 'Unknown error'}`,
+      );
     }
 
     return (data || []).map((cat: any) => ({
@@ -261,32 +275,44 @@ export class BrandsController {
 
   @Post('my-brand/upload-image')
   @HttpCode(HttpStatus.OK)
-  @UseInterceptors(FileInterceptor('image', {
-    limits: {
-      fileSize: 50 * 1024 * 1024, // 50MB limit to handle larger images
-    },
-  }))
+  @UseInterceptors(
+    FileInterceptor('image', {
+      limits: {
+        fileSize: 50 * 1024 * 1024, // 50MB limit to handle larger images
+      },
+    }),
+  )
   async uploadBrandImage(
     @UploadedFile() file: Express.Multer.File | undefined,
     @Headers('authorization') authHeader?: string,
     @Req() req?: Request,
   ) {
     console.log('=== UPLOAD DEBUG ===');
-    console.log('File received:', file ? { 
-      name: file.originalname, 
-      size: file.size, 
-      mimetype: file.mimetype,
-      fieldname: file.fieldname 
-    } : 'NO FILE');
+    console.log(
+      'File received:',
+      file
+        ? {
+            name: file.originalname,
+            size: file.size,
+            mimetype: file.mimetype,
+            fieldname: file.fieldname,
+          }
+        : 'NO FILE',
+    );
     console.log('Request body:', req?.body);
-    console.log('Request headers content-type:', req?.headers?.['content-type']);
+    console.log(
+      'Request headers content-type:',
+      req?.headers?.['content-type'],
+    );
     console.log('Auth header:', authHeader ? 'Present' : 'Missing');
     console.log('===================');
-    
+
     if (!file) {
       console.error('File is undefined. Request body:', req?.body);
       console.error('Request headers:', req?.headers);
-      throw new BadRequestException('No file provided. Please select an image file and try again. File field name must be "image".');
+      throw new BadRequestException(
+        'No file provided. Please select an image file and try again. File field name must be "image".',
+      );
     }
 
     const token = authHeader?.replace('Bearer ', '');
@@ -302,9 +328,14 @@ export class BrandsController {
     }
 
     // Get imageType from FormData body (parsed by multer)
-    const imageType: 'logo' | 'cover' = req?.body?.imageType === 'cover' ? 'cover' : 'logo';
-    
-    const imageUrl = await this.brandsUploadService.uploadImage(userData.user.id, file, imageType);
+    const imageType: 'logo' | 'cover' =
+      req?.body?.imageType === 'cover' ? 'cover' : 'logo';
+
+    const imageUrl = await this.brandsUploadService.uploadImage(
+      userData.user.id,
+      file,
+      imageType,
+    );
 
     return {
       url: imageUrl,
@@ -312,4 +343,3 @@ export class BrandsController {
     };
   }
 }
-

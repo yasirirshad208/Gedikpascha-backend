@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
 import { RegisterRetailBrandDto } from './dto/register-brand';
 import { UpdateRetailBrandDto } from './dto/update-brand';
@@ -7,27 +11,35 @@ import { UpdateRetailBrandDto } from './dto/update-brand';
 export class RetailBrandsService {
   constructor(private readonly supabaseService: SupabaseService) {}
 
-  async registerBrand(registerBrandDto: RegisterRetailBrandDto, userId: string) {
+  async registerBrand(
+    registerBrandDto: RegisterRetailBrandDto,
+    userId: string,
+  ) {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Normalize brand name (lowercase, no spaces)
-    const normalizedBrandName = registerBrandDto.brandName.toLowerCase().replace(/\s/g, '');
+    const normalizedBrandName = registerBrandDto.brandName
+      .toLowerCase()
+      .replace(/\s/g, '');
 
     // Check if brand name already exists
-    const { data: existingBrandName, error: nameCheckError } = await serviceClient
-      .from('retail_brands')
-      .select('id, brand_name')
-      .eq('brand_name', normalizedBrandName)
-      .maybeSingle();
+    const { data: existingBrandName, error: nameCheckError } =
+      await serviceClient
+        .from('retail_brands')
+        .select('id, brand_name')
+        .eq('brand_name', normalizedBrandName)
+        .maybeSingle();
 
     if (nameCheckError) {
       throw new BadRequestException(
-        `Failed to check brand name availability: ${nameCheckError.message || 'Unknown error'}`
+        `Failed to check brand name availability: ${nameCheckError.message || 'Unknown error'}`,
       );
     }
 
     if (existingBrandName) {
-      throw new BadRequestException('Brand name is already taken. Please choose a different name.');
+      throw new BadRequestException(
+        'Brand name is already taken. Please choose a different name.',
+      );
     }
 
     // Check if user already has a brand registration
@@ -39,7 +51,7 @@ export class RetailBrandsService {
 
     if (checkError) {
       throw new BadRequestException(
-        `Failed to check existing brand registration: ${checkError.message || 'Unknown error'}`
+        `Failed to check existing brand registration: ${checkError.message || 'Unknown error'}`,
       );
     }
 
@@ -51,9 +63,13 @@ export class RetailBrandsService {
           .delete()
           .eq('id', existingBrand.id);
       } else if (existingBrand.status === 'pending') {
-        throw new BadRequestException('You already have a brand registration pending review. Please wait for admin approval.');
+        throw new BadRequestException(
+          'You already have a brand registration pending review. Please wait for admin approval.',
+        );
       } else if (existingBrand.status === 'approved') {
-        throw new BadRequestException('You already have an approved brand registration. You cannot register another brand.');
+        throw new BadRequestException(
+          'You already have an approved brand registration. You cannot register another brand.',
+        );
       }
     }
 
@@ -81,9 +97,13 @@ export class RetailBrandsService {
 
     if (error) {
       if (error.code === '23505' || error.message?.includes('unique')) {
-        throw new BadRequestException('Brand name is already taken. Please choose a different name.');
+        throw new BadRequestException(
+          'Brand name is already taken. Please choose a different name.',
+        );
       }
-      throw new BadRequestException(error.message || 'Failed to register brand');
+      throw new BadRequestException(
+        error.message || 'Failed to register brand',
+      );
     }
 
     return {
@@ -91,7 +111,8 @@ export class RetailBrandsService {
       brandName: data.brand_name,
       displayName: data.display_name,
       status: data.status,
-      message: 'Brand registration submitted successfully. Your brand is pending admin review.',
+      message:
+        'Brand registration submitted successfully. Your brand is pending admin review.',
     };
   }
 
@@ -147,7 +168,12 @@ export class RetailBrandsService {
     return brands || [];
   }
 
-  async getAllBrands(status?: 'pending' | 'approved' | 'rejected', page = 1, limit = 12, search?: string) {
+  async getAllBrands(
+    status?: 'pending' | 'approved' | 'rejected',
+    page = 1,
+    limit = 12,
+    search?: string,
+  ) {
     const serviceClient = this.supabaseService.getServiceClient();
     const offset = (page - 1) * limit;
 
@@ -164,14 +190,16 @@ export class RetailBrandsService {
     if (search && search.trim()) {
       const searchTerm = `%${search.trim()}%`;
       countQuery = countQuery.or(
-        `display_name.ilike.${searchTerm},brand_name.ilike.${searchTerm},contact_email.ilike.${searchTerm},description.ilike.${searchTerm}`
+        `display_name.ilike.${searchTerm},brand_name.ilike.${searchTerm},contact_email.ilike.${searchTerm},description.ilike.${searchTerm}`,
       );
     }
 
     const { count, error: countError } = await countQuery;
 
     if (countError) {
-      throw new BadRequestException(`Failed to count brands: ${countError.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to count brands: ${countError.message || 'Unknown error'}`,
+      );
     }
 
     // Fetch brands with pagination
@@ -189,14 +217,16 @@ export class RetailBrandsService {
     if (search && search.trim()) {
       const searchTerm = `%${search.trim()}%`;
       query = query.or(
-        `display_name.ilike.${searchTerm},brand_name.ilike.${searchTerm},contact_email.ilike.${searchTerm},description.ilike.${searchTerm}`
+        `display_name.ilike.${searchTerm},brand_name.ilike.${searchTerm},contact_email.ilike.${searchTerm},description.ilike.${searchTerm}`,
       );
     }
 
     const { data, error } = await query;
 
     if (error) {
-      throw new BadRequestException(`Failed to fetch brands: ${error.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to fetch brands: ${error.message || 'Unknown error'}`,
+      );
     }
 
     // Fetch all categories to map IDs to names
@@ -250,7 +280,12 @@ export class RetailBrandsService {
     };
   }
 
-  async updateBrandStatus(brandId: string, status: 'approved' | 'rejected', adminUserId: string, rejectionReason?: string) {
+  async updateBrandStatus(
+    brandId: string,
+    status: 'approved' | 'rejected',
+    adminUserId: string,
+    rejectionReason?: string,
+  ) {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Check if brand exists
@@ -287,7 +322,9 @@ export class RetailBrandsService {
       .single();
 
     if (error) {
-      throw new BadRequestException(`Failed to update brand status: ${error.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to update brand status: ${error.message || 'Unknown error'}`,
+      );
     }
 
     return {
@@ -321,15 +358,24 @@ export class RetailBrandsService {
       updated_at: new Date().toISOString(),
     };
 
-    if (updateBrandDto.displayName !== undefined) updateData.display_name = updateBrandDto.displayName;
-    if (updateBrandDto.description !== undefined) updateData.description = updateBrandDto.description;
-    if (updateBrandDto.country !== undefined) updateData.country = updateBrandDto.country;
-    if (updateBrandDto.contactEmail !== undefined) updateData.contact_email = updateBrandDto.contactEmail;
-    if (updateBrandDto.phone !== undefined) updateData.phone = updateBrandDto.phone;
-    if (updateBrandDto.website !== undefined) updateData.website = updateBrandDto.website;
-    if (updateBrandDto.category !== undefined) updateData.category = updateBrandDto.category;
-    if (updateBrandDto.logoUrl !== undefined) updateData.logo_url = updateBrandDto.logoUrl;
-    if (updateBrandDto.coverImageUrl !== undefined) updateData.cover_image_url = updateBrandDto.coverImageUrl;
+    if (updateBrandDto.displayName !== undefined)
+      updateData.display_name = updateBrandDto.displayName;
+    if (updateBrandDto.description !== undefined)
+      updateData.description = updateBrandDto.description;
+    if (updateBrandDto.country !== undefined)
+      updateData.country = updateBrandDto.country;
+    if (updateBrandDto.contactEmail !== undefined)
+      updateData.contact_email = updateBrandDto.contactEmail;
+    if (updateBrandDto.phone !== undefined)
+      updateData.phone = updateBrandDto.phone;
+    if (updateBrandDto.website !== undefined)
+      updateData.website = updateBrandDto.website;
+    if (updateBrandDto.category !== undefined)
+      updateData.category = updateBrandDto.category;
+    if (updateBrandDto.logoUrl !== undefined)
+      updateData.logo_url = updateBrandDto.logoUrl;
+    if (updateBrandDto.coverImageUrl !== undefined)
+      updateData.cover_image_url = updateBrandDto.coverImageUrl;
 
     const { data, error } = await serviceClient
       .from('retail_brands')
@@ -339,7 +385,9 @@ export class RetailBrandsService {
       .single();
 
     if (error) {
-      throw new BadRequestException(`Failed to update brand: ${error.message || 'Unknown error'}`);
+      throw new BadRequestException(
+        `Failed to update brand: ${error.message || 'Unknown error'}`,
+      );
     }
 
     return {

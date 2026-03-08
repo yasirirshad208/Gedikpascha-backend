@@ -195,7 +195,14 @@ export class CreateOrderDto {
 
 export class UpdateOrderStatusDto {
   @IsString()
-  status: 'pending' | 'confirmed' | 'processing' | 'shipped' | 'delivered' | 'cancelled' | 'refunded';
+  status:
+    | 'pending'
+    | 'confirmed'
+    | 'processing'
+    | 'shipped'
+    | 'delivered'
+    | 'cancelled'
+    | 'refunded';
 
   @IsOptional()
   @IsString()

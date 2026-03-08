@@ -1,4 +1,16 @@
-import { IsString, IsOptional, IsNumber, IsBoolean, IsUUID, IsArray, IsObject, ValidateNested, Min, Max, IsEnum } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsNumber,
+  IsBoolean,
+  IsUUID,
+  IsArray,
+  IsObject,
+  ValidateNested,
+  Min,
+  Max,
+  IsEnum,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ProductImageDto {
@@ -367,4 +379,3 @@ export class CreateProductDto {
   @Type(() => ProductPackSizeDto)
   packSizes?: ProductPackSizeDto[];
 }
-

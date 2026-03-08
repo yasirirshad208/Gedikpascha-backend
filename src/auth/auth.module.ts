@@ -10,4 +10,3 @@ import { SupabaseModule } from '../supabase/supabase.module';
   exports: [AuthService],
 })
 export class AuthModule {}
-

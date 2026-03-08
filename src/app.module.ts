@@ -21,7 +21,24 @@ import { AdminOnlyGuard } from './admin/guards/admin-only.guard';
 import { SocialModule } from './social/social.module';
 
 @Module({
-  imports: [SupabaseModule, AuthModule, BrandsModule, ProductsModule, CartModule, OrdersModule, FavouritesModule, ReviewsModule, RetailBrandsModule, RetailProductsModule, RetailCartModule, RetailOrdersModule, RetailModule, AdminModule, PublicCategoriesModule, SocialModule],
+  imports: [
+    SupabaseModule,
+    AuthModule,
+    BrandsModule,
+    ProductsModule,
+    CartModule,
+    OrdersModule,
+    FavouritesModule,
+    ReviewsModule,
+    RetailBrandsModule,
+    RetailProductsModule,
+    RetailCartModule,
+    RetailOrdersModule,
+    RetailModule,
+    AdminModule,
+    PublicCategoriesModule,
+    SocialModule,
+  ],
   controllers: [AppController],
   providers: [
     AppService,

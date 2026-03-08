@@ -11,7 +11,7 @@ async function bootstrap() {
     bodyParser: true,
     rawBody: false,
   });
-  
+
   // Enable CORS for frontend
   app.enableCors({
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',

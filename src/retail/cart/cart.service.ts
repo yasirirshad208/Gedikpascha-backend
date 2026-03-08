@@ -69,11 +69,11 @@ export class CartService {
 
       // Calculate prices
       const currentUnitPrice = product?.retail_price || 0;
-      
+
       // Get available stock for this combination
       const inventory = product?.inventory || [];
       const stockItem = inventory.find(
-        (inv) => inv.combination_key === (item.combination_key || 'default')
+        (inv) => inv.combination_key === (item.combination_key || 'default'),
       );
       const availableStock = stockItem?.stock_quantity || 0;
 
@@ -126,7 +126,10 @@ export class CartService {
       subtotal: transformedItems.reduce((sum, item) => sum + item.itemTotal, 0),
       total: transformedItems.reduce((sum, item) => sum + item.itemTotal, 0),
       totalItems: transformedItems.length,
-      totalPieces: transformedItems.reduce((sum, item) => sum + item.quantity, 0),
+      totalPieces: transformedItems.reduce(
+        (sum, item) => sum + item.quantity,
+        0,
+      ),
       itemCount: transformedItems.length,
     };
 
@@ -142,7 +145,9 @@ export class CartService {
     // Verify product exists and is active
     const { data: product, error: productError } = await serviceClient
       .from('retail_products')
-      .select('id, name, status, retail_price, compare_at_price, stock_quantity')
+      .select(
+        'id, name, status, retail_price, compare_at_price, stock_quantity',
+      )
       .eq('id', dto.productId)
       .single();
 
@@ -222,7 +227,11 @@ export class CartService {
     return data;
   }
 
-  async updateCartItem(userId: string, cartItemId: string, dto: UpdateCartItemDto) {
+  async updateCartItem(
+    userId: string,
+    cartItemId: string,
+    dto: UpdateCartItemDto,
+  ) {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Verify cart item belongs to user
@@ -247,7 +256,9 @@ export class CartService {
         .single();
 
       if (!inventoryItem || inventoryItem.stock_quantity < dto.quantity) {
-        throw new BadRequestException('Insufficient stock for selected variation');
+        throw new BadRequestException(
+          'Insufficient stock for selected variation',
+        );
       }
     } else if (cartItem.product.stock_quantity < dto.quantity) {
       throw new BadRequestException('Insufficient stock');
@@ -327,7 +338,7 @@ export class CartService {
 
   private parseCombinationKey(combinationKey: string): Record<string, string> {
     const selections: Record<string, string> = {};
-    
+
     if (!combinationKey || combinationKey === 'default') {
       return selections;
     }

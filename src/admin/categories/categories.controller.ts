@@ -127,7 +127,10 @@ export class CategoriesController {
   ) {
     await this.verifyAdmin(authHeader);
     const includeInactiveFlag = includeInactive === 'true';
-    return this.categoriesService.getSubcategoriesByCategory(categoryId, includeInactiveFlag);
+    return this.categoriesService.getSubcategoriesByCategory(
+      categoryId,
+      includeInactiveFlag,
+    );
   }
 
   @Put('subcategories/:id')
@@ -139,7 +142,10 @@ export class CategoriesController {
     @Headers('authorization') authHeader?: string,
   ) {
     await this.verifyAdmin(authHeader);
-    return this.categoriesService.updateSubcategory(subcategoryId, updateSubcategoryDto);
+    return this.categoriesService.updateSubcategory(
+      subcategoryId,
+      updateSubcategoryDto,
+    );
   }
 
   @Delete('subcategories/:id')
