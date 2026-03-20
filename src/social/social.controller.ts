@@ -97,20 +97,59 @@ export class SocialController {
     @Query('mode') mode = 'all',
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
+    @Query('locale') locale?: string,
+    @Query('sort') sort?: string,
   ) {
     const user = await this.getOptionalUser(authHeader);
-    return this.socialService.getFeed(
+    return this.socialService.getCachedFeed(
       mode as any,
       user?.id ?? null,
       limit,
       cursor,
+      locale,
+      sort,
     );
   }
 
   @Get('explore')
-  async getExplore(@Headers('authorization') authHeader?: string) {
+  async getExplore(
+    @Headers('authorization') authHeader?: string,
+    @Query('locale') locale?: string,
+  ) {
     const user = await this.getOptionalUser(authHeader);
-    return this.socialService.getExplore(user?.id ?? null);
+    return this.socialService.getCachedExplore(user?.id ?? null, locale);
+  }
+
+  @Get('feature-flags')
+  async getFeatureFlags() {
+    return this.socialService.getFeatureFlags();
+  }
+
+  private parseCsv(raw?: string): string[] {
+    if (!raw) return [];
+    return Array.from(
+      new Set(
+        String(raw)
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  @Get('summary')
+  async getSummary(@Headers('authorization') authHeader?: string) {
+    const user = await this.getOptionalUser(authHeader);
+    return this.socialService.getSummary(user?.id ?? null);
+  }
+
+  @Post('analytics/events')
+  async ingestAnalyticsEvents(
+    @Headers('authorization') authHeader: string | undefined,
+    @Body() payload: { events?: unknown[] },
+  ) {
+    const user = await this.getOptionalUser(authHeader);
+    return this.socialService.ingestAnalyticsEvents(user?.id ?? null, payload);
   }
 
   @Get('explore/feed')
@@ -120,6 +159,10 @@ export class SocialController {
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
     @Query('q') q?: string,
+    @Query('sort') sort?: string,
+    @Query('category') category?: string,
+    @Query('price_min') priceMin?: string,
+    @Query('price_max') priceMax?: string,
   ) {
     const user = await this.getOptionalUser(authHeader);
     return this.socialService.getExploreFeed(
@@ -128,6 +171,10 @@ export class SocialController {
       limit,
       cursor,
       q,
+      sort,
+      category,
+      priceMin,
+      priceMax,
     );
   }
 
@@ -144,6 +191,54 @@ export class SocialController {
       limit: limit ? Number(limit) : undefined,
       cursor,
     });
+  }
+
+  @Get('search/global')
+  async searchGlobal(
+    @Headers('authorization') authHeader?: string,
+    @Query('q') q?: string,
+    @Query('scope') scope?: string,
+    @Query('cursor') cursor?: string,
+    @Query('limit') limit?: string,
+    @Query('locale') locale?: string,
+  ) {
+    const user = await this.getOptionalUser(authHeader);
+    return this.socialService.searchGlobal(user?.id ?? null, {
+      q,
+      scope,
+      cursor,
+      locale,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
+  @Get('search/saved')
+  async getSavedSearches(@Headers('authorization') authHeader: string) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.getSavedSearches(user.id);
+  }
+
+  @Post('search/saved')
+  async createSavedSearch(
+    @Headers('authorization') authHeader: string,
+    @Body()
+    payload: {
+      query?: string;
+      scope?: string;
+      filters?: Record<string, unknown>;
+    },
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.createSavedSearch(user.id, payload);
+  }
+
+  @Delete('search/saved/:searchId')
+  async deleteSavedSearch(
+    @Headers('authorization') authHeader: string,
+    @Param('searchId') searchId: string,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.deleteSavedSearch(user.id, searchId);
   }
 
   @Get('users/suggested')
@@ -202,10 +297,175 @@ export class SocialController {
     return this.socialService.getStatusViewers(user.id, statusId);
   }
 
+  @Get('live')
+  async getLiveSessions(
+    @Headers('authorization') authHeader?: string,
+    @Query('status') status?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const user = await this.getOptionalUser(authHeader);
+    return this.socialService.getLiveSessions(user?.id ?? null, status, limit);
+  }
+
+  @Get('live/:sessionId')
+  async getLiveSessionDetail(
+    @Headers('authorization') authHeader: string | undefined,
+    @Param('sessionId') sessionId: string,
+    @Query('limit') limit?: string,
+  ) {
+    const user = await this.getOptionalUser(authHeader);
+    return this.socialService.getLiveSessionDetail(
+      user?.id ?? null,
+      sessionId,
+      limit,
+    );
+  }
+
+  @Post('live')
+  async createLiveSession(
+    @Headers('authorization') authHeader: string,
+    @Body() payload: any,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.createLiveSession(user.id, payload);
+  }
+
+  @Post('live/:sessionId/cover')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: {
+        fileSize: 20 * 1024 * 1024,
+      },
+    }),
+  )
+  async uploadLiveCover(
+    @Headers('authorization') authHeader: string,
+    @Param('sessionId') sessionId: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.uploadLiveCover(user.id, sessionId, file);
+  }
+
+  @Post('live/:sessionId/go-live')
+  async goLiveSession(
+    @Headers('authorization') authHeader: string,
+    @Param('sessionId') sessionId: string,
+    @Body() payload: { playbackUrl?: string; playbackHlsUrl?: string },
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.goLiveSession(user.id, sessionId, payload);
+  }
+
+  @Patch('live/:sessionId/start')
+  async startLiveSession(
+    @Headers('authorization') authHeader: string,
+    @Param('sessionId') sessionId: string,
+    @Body() payload: { playbackUrl?: string; playbackHlsUrl?: string },
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.goLiveSession(user.id, sessionId, payload);
+  }
+
+  @Post('live/:sessionId/viewer-token')
+  async getLiveViewerToken(
+    @Headers('authorization') authHeader: string,
+    @Param('sessionId') sessionId: string,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.getLiveViewerToken(user.id, sessionId);
+  }
+
+  @Patch('live/:sessionId/end')
+  async endLiveSession(
+    @Headers('authorization') authHeader: string,
+    @Param('sessionId') sessionId: string,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.endLiveSession(user.id, sessionId);
+  }
+
+  @Post('live/:sessionId/join')
+  async joinLiveSession(
+    @Headers('authorization') authHeader: string,
+    @Param('sessionId') sessionId: string,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.joinLiveSession(user.id, sessionId);
+  }
+
+  @Post('live/:sessionId/presence/heartbeat')
+  async heartbeatLivePresence(
+    @Headers('authorization') authHeader: string,
+    @Param('sessionId') sessionId: string,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.heartbeatLivePresence(user.id, sessionId);
+  }
+
+  @Post('live/:sessionId/leave')
+  async leaveLiveSession(
+    @Headers('authorization') authHeader: string,
+    @Param('sessionId') sessionId: string,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.leaveLiveSession(user.id, sessionId);
+  }
+
+  @Post('live/:sessionId/messages')
+  async createLiveMessage(
+    @Headers('authorization') authHeader: string,
+    @Param('sessionId') sessionId: string,
+    @Body() payload: { body?: string },
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.createLiveMessage(user.id, sessionId, payload);
+  }
+
+  @Post('live/:sessionId/reactions')
+  async createLiveReaction(
+    @Headers('authorization') authHeader: string,
+    @Param('sessionId') sessionId: string,
+    @Body() payload: { emoji?: string },
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.createLiveReaction(user.id, sessionId, payload);
+  }
+
+  @Post('live/:sessionId/pin-product')
+  async pinLiveProduct(
+    @Headers('authorization') authHeader: string,
+    @Param('sessionId') sessionId: string,
+    @Body() payload: { productId?: string },
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    const productId = String(payload?.productId ?? '').trim();
+    return this.socialService.pinLiveProduct(user.id, sessionId, productId);
+  }
+
+  @Delete('live/:sessionId/pin-product/:productId')
+  async unpinLiveProduct(
+    @Headers('authorization') authHeader: string,
+    @Param('sessionId') sessionId: string,
+    @Param('productId') productId: string,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.unpinLiveProduct(user.id, sessionId, productId);
+  }
+
+  @Post('live/provider/webhook')
+  async handleLiveProviderWebhook(
+    @Headers('x-social-live-webhook-secret') webhookSecret: string | undefined,
+    @Body() payload: Record<string, unknown>,
+  ) {
+    return this.socialService.handleLiveProviderWebhook(webhookSecret, payload);
+  }
+
   @Get('shop/search')
   async getShopSearch(
     @Headers('authorization') authHeader?: string,
     @Query('q') q?: string,
+    @Query('sort') sort?: string,
     @Query('categoryId') categoryId?: string,
     @Query('subcategoryId') subcategoryId?: string,
     @Query('subSubcategoryId') subSubcategoryId?: string,
@@ -213,6 +473,14 @@ export class SocialController {
     @Query('brand') brand?: string,
     @Query('size') size?: string,
     @Query('color') color?: string,
+    @Query('source') source?: string,
+    @Query('availability') availability?: string,
+    @Query('rating') rating?: string,
+    @Query('sellerType') sellerType?: string,
+    @Query('seller') seller?: string,
+    @Query('extras') extras?: string,
+    @Query('location') location?: string,
+    @Query('radius') radius?: string,
     @Query('filters') filters?: string,
     @Query('minPrice') minPrice?: string,
     @Query('maxPrice') maxPrice?: string,
@@ -221,17 +489,35 @@ export class SocialController {
     @Query('lng') lng?: string,
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
+    @Query('locale') locale?: string,
   ) {
     const user = await this.getOptionalUser(authHeader);
-    return this.socialService.getShopSearch(user?.id ?? null, {
+    const conditionValues = this.parseCsv(condition);
+    const brandValues = this.parseCsv(brand);
+    const sizeValues = this.parseCsv(size);
+    const colorValues = this.parseCsv(color);
+    return this.socialService.getCachedShopSearch(user?.id ?? null, {
       q,
+      sort,
       categoryId,
       subcategoryId,
       subSubcategoryId,
-      condition,
-      brand,
-      size,
-      color,
+      condition: conditionValues[0],
+      brand: brandValues[0],
+      size: sizeValues[0],
+      color: colorValues[0],
+      conditionValues,
+      brandValues,
+      sizeValues,
+      colorValues,
+      source: this.parseCsv(source),
+      availability: this.parseCsv(availability),
+      rating: this.parseCsv(rating),
+      sellerType: this.parseCsv(sellerType),
+      seller: this.parseCsv(seller),
+      extras: this.parseCsv(extras),
+      location,
+      radius,
       dynamicFilters: this.parseDynamicFilters(filters),
       minPrice: minPrice ? Number(minPrice) : undefined,
       maxPrice: maxPrice ? Number(maxPrice) : undefined,
@@ -240,6 +526,7 @@ export class SocialController {
       lng: lng ? Number(lng) : undefined,
       limit: limit ? Number(limit) : undefined,
       cursor,
+      locale,
     });
   }
 
@@ -252,6 +539,7 @@ export class SocialController {
   async getClosetSearch(
     @Headers('authorization') authHeader?: string,
     @Query('q') q?: string,
+    @Query('sort') sort?: string,
     @Query('categoryId') categoryId?: string,
     @Query('subcategoryId') subcategoryId?: string,
     @Query('subSubcategoryId') subSubcategoryId?: string,
@@ -259,6 +547,14 @@ export class SocialController {
     @Query('brand') brand?: string,
     @Query('size') size?: string,
     @Query('color') color?: string,
+    @Query('source') source?: string,
+    @Query('availability') availability?: string,
+    @Query('rating') rating?: string,
+    @Query('sellerType') sellerType?: string,
+    @Query('seller') seller?: string,
+    @Query('extras') extras?: string,
+    @Query('location') location?: string,
+    @Query('radius') radius?: string,
     @Query('filters') filters?: string,
     @Query('minPrice') minPrice?: string,
     @Query('maxPrice') maxPrice?: string,
@@ -267,17 +563,35 @@ export class SocialController {
     @Query('lng') lng?: string,
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
+    @Query('locale') locale?: string,
   ) {
     const user = await this.getOptionalUser(authHeader);
-    return this.socialService.getClosetSearch(user?.id ?? null, {
+    const conditionValues = this.parseCsv(condition);
+    const brandValues = this.parseCsv(brand);
+    const sizeValues = this.parseCsv(size);
+    const colorValues = this.parseCsv(color);
+    return this.socialService.getCachedClosetSearch(user?.id ?? null, {
       q,
+      sort,
       categoryId,
       subcategoryId,
       subSubcategoryId,
-      condition,
-      brand,
-      size,
-      color,
+      condition: conditionValues[0],
+      brand: brandValues[0],
+      size: sizeValues[0],
+      color: colorValues[0],
+      conditionValues,
+      brandValues,
+      sizeValues,
+      colorValues,
+      source: this.parseCsv(source),
+      availability: this.parseCsv(availability),
+      rating: this.parseCsv(rating),
+      sellerType: this.parseCsv(sellerType),
+      seller: this.parseCsv(seller),
+      extras: this.parseCsv(extras),
+      location,
+      radius,
       dynamicFilters: this.parseDynamicFilters(filters),
       minPrice: minPrice ? Number(minPrice) : undefined,
       maxPrice: maxPrice ? Number(maxPrice) : undefined,
@@ -286,6 +600,7 @@ export class SocialController {
       lng: lng ? Number(lng) : undefined,
       limit: limit ? Number(limit) : undefined,
       cursor,
+      locale,
     });
   }
 
@@ -766,9 +1081,42 @@ export class SocialController {
   }
 
   @Get('exchange')
-  async getExchangeListings(@Headers('authorization') authHeader?: string) {
+  async getExchangeListings(
+    @Headers('authorization') authHeader?: string,
+    @Query('locale') locale?: string,
+    @Query('q') q?: string,
+    @Query('status') status?: string,
+    @Query('sort') sort?: string,
+    @Query('give') give?: string,
+    @Query('want') want?: string,
+    @Query('value') value?: string,
+    @Query('type') type?: string,
+    @Query('condition') condition?: string,
+    @Query('seller') seller?: string,
+    @Query('limit') limit?: string,
+  ) {
     const user = await this.getOptionalUser(authHeader);
-    return this.socialService.getExchangeListings(user?.id ?? null);
+    const parsedLimit = Number(limit);
+    const normalizedLimit =
+      Number.isFinite(parsedLimit) && parsedLimit > 0
+        ? Math.floor(parsedLimit)
+        : undefined;
+    return this.socialService.getCachedExchangeListings(
+      user?.id ?? null,
+      locale,
+      {
+        q,
+        status,
+        sort,
+        give,
+        want,
+        value,
+        type,
+        condition,
+        seller,
+        limit: normalizedLimit,
+      },
+    );
   }
 
   @Get('exchange/my')
@@ -891,7 +1239,11 @@ export class SocialController {
     @Body() payload: { notes?: string },
   ) {
     const user = await this.getRequiredUser(authHeader);
-    return this.socialService.confirmSwapDelivery(user.id, transactionId, payload);
+    return this.socialService.confirmSwapDelivery(
+      user.id,
+      transactionId,
+      payload,
+    );
   }
 
   @Post('exchange/transactions/:transactionId/disputes')
@@ -902,6 +1254,81 @@ export class SocialController {
   ) {
     const user = await this.getRequiredUser(authHeader);
     return this.socialService.openSwapDispute(user.id, transactionId, payload);
+  }
+
+  @Get('exchange/disputes')
+  async getSwapDisputes(
+    @Headers('authorization') authHeader: string,
+    @Query('status') status?: string,
+    @Query('queue') queue?: string,
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.listSwapDisputes(user.id, {
+      status,
+      queue: queue === 'true' || queue === '1',
+      limit: limit ? Number(limit) : undefined,
+      cursor,
+    });
+  }
+
+  @Get('exchange/disputes/:disputeId')
+  async getSwapDisputeDetail(
+    @Headers('authorization') authHeader: string,
+    @Param('disputeId') disputeId: string,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.getSwapDisputeDetail(user.id, disputeId);
+  }
+
+  @Post('exchange/disputes/:disputeId/messages')
+  async createSwapDisputeMessage(
+    @Headers('authorization') authHeader: string,
+    @Param('disputeId') disputeId: string,
+    @Body() payload: { body?: string; isInternal?: boolean },
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.createSwapDisputeMessage(
+      user.id,
+      disputeId,
+      payload,
+    );
+  }
+
+  @Post('exchange/disputes/:disputeId/evidence')
+  async createSwapDisputeEvidence(
+    @Headers('authorization') authHeader: string,
+    @Param('disputeId') disputeId: string,
+    @Body()
+    payload: {
+      fileUrl?: string;
+      fileType?: string;
+      note?: string;
+      isInternal?: boolean;
+    },
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.createSwapDisputeEvidence(
+      user.id,
+      disputeId,
+      payload,
+    );
+  }
+
+  @Patch('exchange/disputes/:disputeId')
+  async updateSwapDispute(
+    @Headers('authorization') authHeader: string,
+    @Param('disputeId') disputeId: string,
+    @Body()
+    payload: {
+      action?: 'resolve' | 'escalate' | 'reopen';
+      resolutionNotes?: string;
+      priority?: string;
+    },
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.updateSwapDispute(user.id, disputeId, payload);
   }
 
   @Get('exchange/addresses')
@@ -944,7 +1371,10 @@ export class SocialController {
     @Param('listingId') listingId: string,
   ) {
     const user = await this.getOptionalUser(authHeader);
-    return this.socialService.getExchangeListingById(listingId, user?.id ?? null);
+    return this.socialService.getExchangeListingById(
+      listingId,
+      user?.id ?? null,
+    );
   }
 
   @Get('messages/threads')

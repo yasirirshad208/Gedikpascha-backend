@@ -3,11 +3,28 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { SocialUploadService } from './social-upload.service';
+import { SocialLiveProviderService } from './live-provider.service';
 
 type FeedMode = 'all' | 'posts' | 'reels' | 'closet';
+type HomeFeedSort = 'trending' | 'newest' | 'following' | 'price_low';
 type ExploreFeedTab = 'all' | 'posts' | 'reels' | 'shop';
+type ExploreFeedSort =
+  | 'recommended'
+  | 'newest'
+  | 'price_low'
+  | 'price_high'
+  | 'most_liked';
+type ProductSearchSort =
+  | 'relevance'
+  | 'newest'
+  | 'price_asc'
+  | 'price_desc'
+  | 'most_liked'
+  | 'trending';
 type ListingType = 'shop' | 'closet';
 type SocialContentType = 'post' | 'reel' | 'product';
 
@@ -42,13 +59,26 @@ interface CommentCursor {
 
 interface ProductSearchOptions {
   q?: string;
+  sort?: string;
   categoryId?: string;
   subcategoryId?: string;
   subSubcategoryId?: string;
   condition?: string;
+  conditionValues?: string[];
   brand?: string;
+  brandValues?: string[];
   size?: string;
+  sizeValues?: string[];
   color?: string;
+  colorValues?: string[];
+  source?: string[];
+  availability?: string[];
+  rating?: string[];
+  sellerType?: string[];
+  seller?: string[];
+  extras?: string[];
+  location?: string;
+  radius?: string;
   dynamicFilters?: Record<string, string[]>;
   minPrice?: number;
   maxPrice?: number;
@@ -92,6 +122,68 @@ interface UserSearchOptions {
   q?: string;
   limit?: number;
   cursor?: string;
+}
+
+type SocialSearchScope =
+  | 'all'
+  | 'users'
+  | 'posts'
+  | 'reels'
+  | 'shop'
+  | 'closet'
+  | 'products'
+  | 'exchange';
+
+interface SocialGlobalSearchOptions {
+  q?: string;
+  scope?: string;
+  cursor?: string;
+  limit?: number;
+  locale?: string;
+}
+
+interface SavedSearchPayload {
+  query?: string;
+  scope?: string;
+  filters?: Record<string, unknown>;
+}
+
+interface SwapDisputeListOptions {
+  status?: string;
+  queue?: boolean;
+  limit?: number;
+  cursor?: string;
+}
+
+interface SwapDisputeActionPayload {
+  action?: 'resolve' | 'escalate' | 'reopen';
+  resolutionNotes?: string;
+  priority?: string;
+}
+
+interface ExchangeListingsQueryOptions {
+  q?: string;
+  status?: string;
+  sort?: string;
+  give?: string;
+  want?: string;
+  value?: string;
+  type?: string;
+  condition?: string;
+  seller?: string;
+  limit?: number;
+}
+
+interface SwapDisputeMessagePayload {
+  body?: string;
+  isInternal?: boolean;
+}
+
+interface SwapDisputeEvidencePayload {
+  fileUrl?: string;
+  fileType?: string;
+  note?: string;
+  isInternal?: boolean;
 }
 
 interface RankedUserSearchOptions extends UserSearchOptions {
@@ -171,12 +263,64 @@ interface NormalizedProductAttributes {
   additionalDetails: ProductDetailItem[];
 }
 
+interface SocialAnalyticsEventInput {
+  name?: unknown;
+  route?: unknown;
+  action?: unknown;
+  status?: unknown;
+  correlationId?: unknown;
+  retryable?: unknown;
+  metadata?: unknown;
+  occurredAt?: unknown;
+}
+
 @Injectable()
 export class SocialService {
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(
+    private readonly supabaseService: SupabaseService,
+    private readonly socialUploadService: SocialUploadService,
+    private readonly socialLiveProviderService: SocialLiveProviderService,
+  ) {}
+
+  private readonly socialReadCache = new Map<
+    string,
+    { value: unknown; expiresAt: number }
+  >();
 
   private get serviceClient() {
     return this.supabaseService.getServiceClient();
+  }
+
+  private get socialReadCacheTtlMs(): number {
+    const configured = Number(process.env.SOCIAL_READ_CACHE_TTL_MS ?? 30_000);
+    if (!Number.isFinite(configured) || configured <= 0) {
+      return 30_000;
+    }
+    return Math.min(120_000, Math.floor(configured));
+  }
+
+  private readCacheKey(
+    prefix: string,
+    payload: Record<string, unknown>,
+  ): string {
+    return `${prefix}:${JSON.stringify(payload)}`;
+  }
+
+  private async getOrSetReadCache<T>(
+    key: string,
+    loader: () => Promise<T>,
+  ): Promise<T> {
+    void key;
+    return loader();
+  }
+
+  private normalizeLocale(locale?: string | null): string {
+    const normalized = String(locale ?? '')
+      .trim()
+      .toLowerCase();
+    if (!normalized) return 'en';
+    const safe = normalized.replace(/[^a-z0-9-_]/g, '');
+    return safe || 'en';
   }
 
   private sanitizeLimit(
@@ -426,6 +570,229 @@ export class SocialService {
     }
 
     throw new BadRequestException('Status mediaType must be image or video');
+  }
+
+  private featureFlagKeys = [
+    'social_exchange_managed_flow',
+    'social_reels_enhanced_overlay',
+    'social_messages_rich_share',
+    'social_observability_tracking',
+  ] as const;
+
+  private readFeatureFlagSet(): Set<string> {
+    const combined = [
+      process.env.SOCIAL_FEATURE_FLAGS ?? '',
+      process.env.NEXT_PUBLIC_SOCIAL_FLAGS ?? '',
+    ]
+      .join(',')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    return new Set(combined);
+  }
+
+  private readSupportUserSet(): Set<string> {
+    const merged = [
+      process.env.SOCIAL_SWAP_SUPPORT_USERS ?? '',
+      process.env.SOCIAL_SUPPORT_USER_IDS ?? '',
+    ]
+      .join(',')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    return new Set(merged);
+  }
+
+  private isSupportUser(userId: string | null | undefined): boolean {
+    if (!userId) return false;
+    return this.readSupportUserSet().has(userId);
+  }
+
+  private sanitizeAnalyticsMetadata(value: unknown, depth = 0): unknown {
+    if (depth > 4) return null;
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed.slice(0, 500);
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value
+        .slice(0, 30)
+        .map((entry) => this.sanitizeAnalyticsMetadata(entry, depth + 1));
+    }
+    if (typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      const sanitized: Record<string, unknown> = {};
+      for (const [key, rawValue] of Object.entries(obj)) {
+        const normalizedKey = String(key).toLowerCase();
+        if (
+          normalizedKey.includes('password') ||
+          normalizedKey.includes('token') ||
+          normalizedKey.includes('secret') ||
+          normalizedKey.includes('email') ||
+          normalizedKey.includes('phone')
+        ) {
+          sanitized[key] = '[redacted]';
+          continue;
+        }
+        sanitized[key] = this.sanitizeAnalyticsMetadata(rawValue, depth + 1);
+      }
+      return sanitized;
+    }
+    return null;
+  }
+
+  private sanitizeAnalyticsEvent(input: SocialAnalyticsEventInput) {
+    const name =
+      String(input?.name ?? '')
+        .trim()
+        .slice(0, 120) || 'social.unknown';
+    const route =
+      String(input?.route ?? '')
+        .trim()
+        .slice(0, 500) || null;
+    const action =
+      String(input?.action ?? '')
+        .trim()
+        .slice(0, 120) || null;
+    const status =
+      String(input?.status ?? '')
+        .trim()
+        .slice(0, 32) || null;
+    const correlationId =
+      String(input?.correlationId ?? '')
+        .trim()
+        .slice(0, 120) || null;
+    const retryable =
+      typeof input?.retryable === 'boolean' ? input.retryable : null;
+
+    const rawOccurredAt = String(input?.occurredAt ?? '').trim();
+    const occurredAtDate = rawOccurredAt ? new Date(rawOccurredAt) : new Date();
+    const occurredAt = Number.isNaN(occurredAtDate.getTime())
+      ? new Date().toISOString()
+      : occurredAtDate.toISOString();
+
+    return {
+      name,
+      route,
+      action,
+      status,
+      correlationId,
+      retryable,
+      metadata: this.sanitizeAnalyticsMetadata(input?.metadata ?? null),
+      occurredAt,
+    };
+  }
+
+  async getFeatureFlags() {
+    const enabled = this.readFeatureFlagSet();
+    const now = new Date().toISOString();
+    const flags = Object.fromEntries(
+      this.featureFlagKeys.map((key) => [
+        key,
+        {
+          key,
+          enabled: enabled.has(key),
+          source: enabled.has(key) ? 'env' : 'default',
+          updatedAt: now,
+        },
+      ]),
+    );
+    return { flags };
+  }
+
+  async getSummary(userId: string | null | undefined) {
+    const [liveResult, notificationResult, threadResult] = await Promise.all([
+      this.serviceClient
+        .from('social_live_sessions')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'live'),
+      userId
+        ? this.serviceClient
+            .from('social_notifications')
+            .select('id', { count: 'exact', head: true })
+            .eq('user_id', userId)
+            .eq('is_read', false)
+        : Promise.resolve({ count: 0, error: null } as any),
+      userId ? this.getThreads(userId) : Promise.resolve([]),
+    ]);
+
+    if (liveResult.error) {
+      throw new BadRequestException(
+        `Failed to fetch live summary count: ${liveResult.error.message}`,
+      );
+    }
+    if (notificationResult?.error) {
+      throw new BadRequestException(
+        `Failed to fetch notification summary count: ${notificationResult.error.message}`,
+      );
+    }
+
+    const messagesUnread = Array.isArray(threadResult)
+      ? threadResult.reduce(
+          (total, thread) => total + Number(thread?.unread_count ?? 0),
+          0,
+        )
+      : 0;
+
+    return {
+      generated_at: new Date().toISOString(),
+      live_now: Number(liveResult.count ?? 0),
+      notifications_unread: Number(notificationResult?.count ?? 0),
+      messages_unread: messagesUnread,
+    };
+  }
+
+  async ingestAnalyticsEvents(
+    userId: string | null,
+    payload: { events?: unknown[] } | null | undefined,
+  ) {
+    const sourceEvents = Array.isArray(payload?.events) ? payload.events : [];
+    const limitedEvents = sourceEvents.slice(0, 200);
+    const sanitizedEvents = limitedEvents.map((entry) =>
+      this.sanitizeAnalyticsEvent((entry ?? {}) as SocialAnalyticsEventInput),
+    );
+
+    if (!sanitizedEvents.length) {
+      return { accepted: 0, dropped: sourceEvents.length };
+    }
+
+    const rows = sanitizedEvents.map((event) => ({
+      user_id: userId,
+      event_name: event.name,
+      route: event.route,
+      action: event.action,
+      status: event.status,
+      correlation_id: event.correlationId,
+      retryable: event.retryable,
+      metadata: event.metadata,
+      occurred_at: event.occurredAt,
+    }));
+
+    const { error } = await this.serviceClient
+      .from('social_analytics_events')
+      .insert(rows);
+
+    if (error) {
+      const missingTable = String(error.message ?? '')
+        .toLowerCase()
+        .includes('social_analytics_events');
+      if (!missingTable) {
+        console.warn(`[social-analytics] insert failed: ${error.message}`);
+      }
+      return {
+        accepted: sanitizedEvents.length,
+        dropped: sourceEvents.length - sanitizedEvents.length,
+      };
+    }
+
+    return {
+      accepted: sanitizedEvents.length,
+      dropped: sourceEvents.length - sanitizedEvents.length,
+    };
   }
 
   private normalizeStatusDuration(
@@ -920,6 +1287,187 @@ export class SocialService {
       return normalized;
     }
     return 'all';
+  }
+
+  private sanitizeExploreSort(value?: string | null): ExploreFeedSort {
+    const normalized = String(value ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '_');
+    if (normalized === 'newest' || normalized === 'latest') return 'newest';
+    if (normalized === 'price_low') return 'price_low';
+    if (normalized === 'price_high') return 'price_high';
+    if (normalized === 'most_liked' || normalized === 'liked') {
+      return 'most_liked';
+    }
+    return 'recommended';
+  }
+
+  private normalizeCategoryFilter(value?: string | null): string | null {
+    const normalized = String(value ?? '')
+      .trim()
+      .toLowerCase();
+    if (!normalized || normalized === 'all') return null;
+    return normalized;
+  }
+
+  private parseExplorePriceBound(value: unknown): number | null {
+    if (value === undefined || value === null || value === '') {
+      return null;
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return null;
+    }
+    return parsed;
+  }
+
+  private getExploreItemTimestampMs(item: any): number {
+    const contentType = this.normalizeContentType(item?.content_type);
+    const source =
+      contentType === 'post'
+        ? (item?.post?.created_at ?? item?.created_at)
+        : contentType === 'reel'
+          ? (item?.reel?.created_at ?? item?.created_at)
+          : (item?.product?.created_at ?? item?.created_at);
+    return this.parseTimestampMs(source);
+  }
+
+  private getExploreItemLikes(item: any): number {
+    const contentType = this.normalizeContentType(item?.content_type);
+    if (contentType === 'post') {
+      return Number(
+        item?.post?.reactions_count ?? item?.post?.likes_count ?? 0,
+      );
+    }
+    if (contentType === 'reel') {
+      return Number(item?.reel?.likes_count ?? 0);
+    }
+    return Number(item?.product?.likes_count ?? 0);
+  }
+
+  private getExploreItemPrice(item: any): number | null {
+    if (this.normalizeContentType(item?.content_type) !== 'product') {
+      return null;
+    }
+    const parsed = Number(item?.product?.price);
+    if (!Number.isFinite(parsed)) return null;
+    return parsed;
+  }
+
+  private getExploreItemCategory(item: any): string | null {
+    if (this.normalizeContentType(item?.content_type) !== 'product') {
+      return null;
+    }
+    const category = String(
+      item?.product?.category ??
+        item?.product?.subcategory ??
+        item?.product?.sub_subcategory ??
+        '',
+    )
+      .trim()
+      .toLowerCase();
+    return category || null;
+  }
+
+  private applyExploreItemFiltersAndSort(
+    items: any[],
+    options: {
+      tab: ExploreFeedTab;
+      sort: ExploreFeedSort;
+      category: string | null;
+      priceMin: number | null;
+      priceMax: number | null;
+    },
+  ): any[] {
+    const supportsProductFiltering =
+      options.tab === 'all' || options.tab === 'shop';
+    const hasProductFilters =
+      supportsProductFiltering &&
+      (options.category !== null ||
+        options.priceMin !== null ||
+        options.priceMax !== null);
+
+    let filtered = items;
+    if (hasProductFilters) {
+      filtered = filtered.filter((item) => {
+        if (this.normalizeContentType(item?.content_type) !== 'product') {
+          return false;
+        }
+
+        const category = this.getExploreItemCategory(item);
+        if (options.category !== null && category !== options.category) {
+          return false;
+        }
+
+        const price = this.getExploreItemPrice(item);
+        if (price === null) return false;
+        if (options.priceMin !== null && price < options.priceMin) {
+          return false;
+        }
+        if (options.priceMax !== null && price > options.priceMax) {
+          return false;
+        }
+        return true;
+      });
+    }
+
+    if (
+      supportsProductFiltering &&
+      (options.sort === 'price_low' || options.sort === 'price_high')
+    ) {
+      filtered = filtered.filter(
+        (item) => this.normalizeContentType(item?.content_type) === 'product',
+      );
+    }
+
+    if (options.sort === 'recommended') {
+      return filtered;
+    }
+
+    const sorted = [...filtered];
+    if (options.sort === 'newest') {
+      sorted.sort(
+        (left, right) =>
+          this.getExploreItemTimestampMs(right) -
+          this.getExploreItemTimestampMs(left),
+      );
+      return sorted;
+    }
+
+    if (options.sort === 'most_liked') {
+      sorted.sort((left, right) => {
+        const likeDiff =
+          this.getExploreItemLikes(right) - this.getExploreItemLikes(left);
+        if (likeDiff !== 0) return likeDiff;
+        return (
+          this.getExploreItemTimestampMs(right) -
+          this.getExploreItemTimestampMs(left)
+        );
+      });
+      return sorted;
+    }
+
+    if (options.sort === 'price_low' || options.sort === 'price_high') {
+      sorted.sort((left, right) => {
+        const leftPrice =
+          this.getExploreItemPrice(left) ?? Number.POSITIVE_INFINITY;
+        const rightPrice =
+          this.getExploreItemPrice(right) ?? Number.POSITIVE_INFINITY;
+        if (leftPrice !== rightPrice) {
+          return options.sort === 'price_low'
+            ? leftPrice - rightPrice
+            : rightPrice - leftPrice;
+        }
+        return (
+          this.getExploreItemTimestampMs(right) -
+          this.getExploreItemTimestampMs(left)
+        );
+      });
+      return sorted;
+    }
+
+    return sorted;
   }
 
   private async getHiddenContentSet(
@@ -1767,6 +2315,37 @@ export class SocialService {
     return map;
   }
 
+  private async getReelTaggedProductIdsMap(reelIds: string[]) {
+    const uniqueIds = Array.from(new Set(reelIds.filter(Boolean)));
+    const map = new Map<string, string[]>();
+    if (!uniqueIds.length) return map;
+
+    const { data, error } = await this.serviceClient
+      .from('social_content_product_tags')
+      .select('content_id, product_id')
+      .eq('content_type', 'reel')
+      .in('content_id', uniqueIds);
+
+    if (error) {
+      throw new BadRequestException(
+        `Failed to load reel tagged products: ${error.message}`,
+      );
+    }
+
+    for (const row of data ?? []) {
+      const reelId = String(row.content_id ?? '').trim();
+      const productId = String(row.product_id ?? '').trim();
+      if (!reelId || !productId) continue;
+      if (!map.has(reelId)) map.set(reelId, []);
+      const existing = map.get(reelId)!;
+      if (!existing.includes(productId)) {
+        existing.push(productId);
+      }
+    }
+
+    return map;
+  }
+
   private async getFollowingSetForViewer(
     viewerUserId?: string | null,
     candidateUserIds: string[] = [],
@@ -1851,6 +2430,7 @@ export class SocialService {
     savedSet: Set<string> = new Set(),
     commentsPreviewMap: Map<string, any[]> = new Map(),
     followingSet: Set<string> = new Set(),
+    taggedProductsMap: Map<string, string[]> = new Map(),
   ) {
     return reelRows.map((reel) => {
       const profile = profiles.get(reel.user_id);
@@ -1882,6 +2462,7 @@ export class SocialService {
         quality_score: reel.quality_score,
         reel_url: primary?.reel_url ?? null,
         thumbnail_url: reel.thumbnail_url ?? primary?.thumbnail_url ?? null,
+        tagged_product_ids: taggedProductsMap.get(reel.id) ?? [],
         comments_preview: commentsPreviewMap.get(reel.id) ?? [],
         social_reel_media: media,
       };
@@ -1965,6 +2546,8 @@ export class SocialService {
         avatar_url: sellerProfile?.avatar_url ?? null,
         followers_count: sellerProfile?.followers_count ?? 0,
         following_count: sellerProfile?.following_count ?? 0,
+        rating_avg: sellerProfile?.rating_avg ?? null,
+        seller_reputation: sellerProfile?.seller_reputation ?? null,
         title: product.title,
         slug: product.slug,
         description: product.description,
@@ -2275,14 +2858,21 @@ export class SocialService {
   private async enrichReels(reelRows: any[], viewerUserId?: string | null) {
     const userIds = reelRows.map((row) => row.user_id);
     const reelIds = reelRows.map((row) => row.id);
-    const [profiles, mediaMap, engagement, commentsPreviewMap, followingSet] =
-      await Promise.all([
-        this.getProfilesMap(userIds),
-        this.getReelMediaMap(reelIds),
-        this.getViewerEngagementSets(viewerUserId ?? null, 'reel', reelIds),
-        this.getCommentsPreviewMap('reel', reelIds, viewerUserId ?? null, 2),
-        this.getFollowingSetForViewer(viewerUserId ?? null, userIds),
-      ]);
+    const [
+      profiles,
+      mediaMap,
+      engagement,
+      commentsPreviewMap,
+      followingSet,
+      taggedProductsMap,
+    ] = await Promise.all([
+      this.getProfilesMap(userIds),
+      this.getReelMediaMap(reelIds),
+      this.getViewerEngagementSets(viewerUserId ?? null, 'reel', reelIds),
+      this.getCommentsPreviewMap('reel', reelIds, viewerUserId ?? null, 2),
+      this.getFollowingSetForViewer(viewerUserId ?? null, userIds),
+      this.getReelTaggedProductIdsMap(reelIds),
+    ]);
     return this.mapReels(
       reelRows,
       profiles,
@@ -2291,7 +2881,73 @@ export class SocialService {
       engagement.saved,
       commentsPreviewMap,
       followingSet,
+      taggedProductsMap,
     );
+  }
+
+  private sanitizeHomeFeedSort(sort?: string | null): HomeFeedSort {
+    const normalized = String(sort ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '_');
+    if (normalized === 'newest') return 'newest';
+    if (normalized === 'following') return 'following';
+    if (normalized === 'price_low' || normalized === 'price:low') {
+      return 'price_low';
+    }
+    return 'trending';
+  }
+
+  async getCachedFeed(
+    mode: FeedMode,
+    userId?: string | null,
+    limitValue?: string | number,
+    cursor?: string,
+    locale?: string,
+    sort?: string | null,
+  ) {
+    const safeLocale = this.normalizeLocale(locale);
+    const safeMode: FeedMode = ['all', 'posts', 'reels', 'closet'].includes(
+      mode,
+    )
+      ? mode
+      : 'all';
+    const safeSort = this.sanitizeHomeFeedSort(sort);
+    const key = this.readCacheKey('social:feed', {
+      mode: safeMode,
+      sort: safeSort,
+      userId: userId ?? null,
+      limit: String(limitValue ?? ''),
+      cursor: cursor ?? null,
+      locale: safeLocale,
+    });
+
+    return this.getOrSetReadCache(key, async () => {
+      try {
+        const data = await this.getFeed(
+          safeMode,
+          userId ?? null,
+          limitValue,
+          cursor,
+          safeSort,
+        );
+        return { ...data, locale: safeLocale };
+      } catch {
+        return {
+          mode: safeMode,
+          sort: safeSort,
+          locale: safeLocale,
+          userId: userId ?? null,
+          posts: [],
+          reels: [],
+          closet: [],
+          nextCursor: null,
+          status: 'error',
+          message: 'Feed is temporarily unavailable.',
+          retryable: true,
+        };
+      }
+    });
   }
 
   async getFeed(
@@ -2299,6 +2955,7 @@ export class SocialService {
     userId?: string | null,
     limitValue?: string | number,
     cursor?: string,
+    sortValue?: string | null,
   ) {
     const limit = this.sanitizeLimit(limitValue, 20, 40);
     const safeMode: FeedMode = ['all', 'posts', 'reels', 'closet'].includes(
@@ -2306,6 +2963,7 @@ export class SocialService {
     )
       ? mode
       : 'all';
+    const safeSort = this.sanitizeHomeFeedSort(sortValue);
 
     if (safeMode === 'posts') {
       const feedCursor = this.parseFeedCursor(cursor);
@@ -2328,6 +2986,7 @@ export class SocialService {
       const last = posts[posts.length - 1];
       return {
         mode: safeMode,
+        sort: safeSort,
         userId: userId ?? null,
         posts,
         reels: [],
@@ -2363,6 +3022,7 @@ export class SocialService {
       const last = (ranked ?? [])[Math.max(0, (ranked ?? []).length - 1)];
       return {
         mode: safeMode,
+        sort: safeSort,
         userId: userId ?? null,
         posts: [],
         reels: ordered,
@@ -2414,6 +3074,7 @@ export class SocialService {
       const last = (ranked ?? [])[Math.max(0, (ranked ?? []).length - 1)];
       return {
         mode: safeMode,
+        sort: safeSort,
         userId: userId ?? null,
         posts: [],
         reels: [],
@@ -2431,60 +3092,73 @@ export class SocialService {
     const allCursor = this.parseFeedCursor(cursor);
 
     let rawRankedFeed: any[] = [];
-    const rankingErrors: string[] = [];
-    const v2Ranking = await this.serviceClient.rpc('social_home_feed_ranked', {
-      p_user_id: userId ?? null,
-      p_limit: limit,
-      p_cursor_score: allCursor?.score ?? null,
-      p_cursor_created_at: allCursor?.createdAt ?? null,
-      p_cursor_content_type: allCursor?.contentType ?? null,
-      p_cursor_content_id: allCursor?.id ?? null,
-    });
-
-    if (!v2Ranking.error) {
-      rawRankedFeed = v2Ranking.data ?? [];
-    } else {
-      const v2ErrorMessage = String(v2Ranking.error.message ?? 'unknown error');
-      rankingErrors.push(`v2: ${v2ErrorMessage}`);
-
-      const legacyRanking = await this.serviceClient.rpc(
+    if (safeSort === 'trending') {
+      const rankingErrors: string[] = [];
+      const v2Ranking = await this.serviceClient.rpc(
         'social_home_feed_ranked',
         {
           p_user_id: userId ?? null,
           p_limit: limit,
+          p_cursor_score: allCursor?.score ?? null,
           p_cursor_created_at: allCursor?.createdAt ?? null,
+          p_cursor_content_type: allCursor?.contentType ?? null,
+          p_cursor_content_id: allCursor?.id ?? null,
         },
       );
 
-      if (legacyRanking.error) {
-        rankingErrors.push(
-          `legacy: ${String(legacyRanking.error.message ?? 'unknown error')}`,
-        );
+      if (!v2Ranking.error) {
+        rawRankedFeed = v2Ranking.data ?? [];
       } else {
-        rawRankedFeed = legacyRanking.data ?? [];
+        const v2ErrorMessage = String(
+          v2Ranking.error.message ?? 'unknown error',
+        );
+        rankingErrors.push(`v2: ${v2ErrorMessage}`);
+
+        const legacyRanking = await this.serviceClient.rpc(
+          'social_home_feed_ranked',
+          {
+            p_user_id: userId ?? null,
+            p_limit: limit,
+            p_cursor_created_at: allCursor?.createdAt ?? null,
+          },
+        );
+
+        if (legacyRanking.error) {
+          rankingErrors.push(
+            `legacy: ${String(legacyRanking.error.message ?? 'unknown error')}`,
+          );
+        } else {
+          rawRankedFeed = legacyRanking.data ?? [];
+        }
       }
+
+      if (!rawRankedFeed.length) {
+        try {
+          rawRankedFeed = await this.getHomeFeedRowsFallback(
+            limit,
+            userId ?? null,
+            allCursor?.createdAt ?? null,
+          );
+        } catch (fallbackError) {
+          const fallbackMessage =
+            fallbackError instanceof Error
+              ? fallbackError.message
+              : 'unknown fallback error';
+          rankingErrors.push(`fallback: ${fallbackMessage}`);
+          throw new BadRequestException(
+            `Failed to fetch home feed ranking: ${rankingErrors.join(' | ')}`,
+          );
+        }
+      }
+    } else {
+      rawRankedFeed = await this.getHomeFeedRowsFallback(
+        limit,
+        userId ?? null,
+        allCursor?.createdAt ?? null,
+      );
     }
 
-    if (!rawRankedFeed.length) {
-      try {
-        rawRankedFeed = await this.getHomeFeedRowsFallback(
-          limit,
-          userId ?? null,
-          allCursor?.createdAt ?? null,
-        );
-      } catch (fallbackError) {
-        const fallbackMessage =
-          fallbackError instanceof Error
-            ? fallbackError.message
-            : 'unknown fallback error';
-        rankingErrors.push(`fallback: ${fallbackMessage}`);
-        throw new BadRequestException(
-          `Failed to fetch home feed ranking: ${rankingErrors.join(' | ')}`,
-        );
-      }
-    }
-
-    const rankedFeed = this.rebalanceHomeFeedRows(rawRankedFeed ?? [], limit);
+    let rankedFeed = this.rebalanceHomeFeedRows(rawRankedFeed ?? [], limit);
 
     const postIds = (rankedFeed ?? [])
       .filter((row: any) => row.content_type === 'post')
@@ -2506,11 +3180,110 @@ export class SocialService {
       this.enrichReels(reelsRaw, userId ?? null),
       this.enrichProducts(productsRaw, userId ?? null),
     ]);
+
+    if (safeSort !== 'trending') {
+      const postMeta = new Map(
+        posts.map((row: any) => [
+          row.id,
+          { created_at: row.created_at, user_id: row.user_id, price: null },
+        ]),
+      );
+      const reelMeta = new Map(
+        reels.map((row: any) => [
+          row.id,
+          { created_at: row.created_at, user_id: row.user_id, price: null },
+        ]),
+      );
+      const productMeta = new Map(
+        products.map((row: any) => [
+          row.id,
+          {
+            created_at: row.created_at,
+            user_id: row.user_id,
+            price: Number(row.price ?? 0),
+          },
+        ]),
+      );
+
+      if (safeSort === 'following' && userId) {
+        const { data: followRows } = await this.serviceClient
+          .from('social_follows')
+          .select('following_id')
+          .eq('follower_id', userId);
+        const following = new Set<string>([
+          userId,
+          ...(followRows ?? [])
+            .map((row: any) => row.following_id)
+            .filter((value: string | null | undefined): value is string =>
+              Boolean(value),
+            ),
+        ]);
+        rankedFeed = rankedFeed.filter((row: any) => {
+          const meta =
+            row.content_type === 'post'
+              ? postMeta.get(row.content_id)
+              : row.content_type === 'reel'
+                ? reelMeta.get(row.content_id)
+                : productMeta.get(row.content_id);
+          return meta ? following.has(meta.user_id) : false;
+        });
+      }
+
+      if (safeSort === 'price_low') {
+        rankedFeed = [
+          ...rankedFeed.filter((row: any) => row.content_type === 'product'),
+          ...rankedFeed.filter((row: any) => row.content_type !== 'product'),
+        ].sort((left: any, right: any) => {
+          if (
+            left.content_type === 'product' &&
+            right.content_type === 'product'
+          ) {
+            const leftMeta = productMeta.get(left.content_id);
+            const rightMeta = productMeta.get(right.content_id);
+            return Number(leftMeta?.price ?? 0) - Number(rightMeta?.price ?? 0);
+          }
+          if (left.content_type === 'product') return -1;
+          if (right.content_type === 'product') return 1;
+          const leftTs = new Date(
+            (left.content_type === 'post'
+              ? postMeta.get(left.content_id)?.created_at
+              : reelMeta.get(left.content_id)?.created_at) ?? 0,
+          ).getTime();
+          const rightTs = new Date(
+            (right.content_type === 'post'
+              ? postMeta.get(right.content_id)?.created_at
+              : reelMeta.get(right.content_id)?.created_at) ?? 0,
+          ).getTime();
+          return rightTs - leftTs;
+        });
+      } else if (safeSort === 'newest' || safeSort === 'following') {
+        rankedFeed = rankedFeed.sort((left: any, right: any) => {
+          const leftMeta =
+            left.content_type === 'post'
+              ? postMeta.get(left.content_id)
+              : left.content_type === 'reel'
+                ? reelMeta.get(left.content_id)
+                : productMeta.get(left.content_id);
+          const rightMeta =
+            right.content_type === 'post'
+              ? postMeta.get(right.content_id)
+              : right.content_type === 'reel'
+                ? reelMeta.get(right.content_id)
+                : productMeta.get(right.content_id);
+          const leftTs = new Date(String(leftMeta?.created_at ?? 0)).getTime();
+          const rightTs = new Date(
+            String(rightMeta?.created_at ?? 0),
+          ).getTime();
+          return rightTs - leftTs;
+        });
+      }
+    }
     const lastRow = (rawRankedFeed ?? [])[
       Math.max(0, (rawRankedFeed ?? []).length - 1)
     ];
     return {
       mode: safeMode,
+      sort: safeSort,
       userId: userId ?? null,
       posts,
       reels,
@@ -2533,11 +3306,25 @@ export class SocialService {
     limitValue?: string | number,
     cursor?: string,
     q?: string,
+    sortValue?: string | null,
+    categoryValue?: string | null,
+    priceMinValue?: string | number | null,
+    priceMaxValue?: string | number | null,
   ) {
     const tab = this.sanitizeExploreTab(tabValue);
     const limit = this.sanitizeLimit(limitValue, 20, 40);
+    const fetchLimit = Math.min(limit * 4, 120);
     const searchTerm = this.sanitizeSearchTerm(q);
     const searchQuery = searchTerm || null;
+    const sort = this.sanitizeExploreSort(sortValue);
+    const categoryFilter = this.normalizeCategoryFilter(categoryValue);
+    const priceMin = this.parseExplorePriceBound(priceMinValue);
+    const priceMax = this.parseExplorePriceBound(priceMaxValue);
+    const supportsProductFiltering = tab === 'all' || tab === 'shop';
+    const hasProductFilters =
+      supportsProductFiltering &&
+      (categoryFilter !== null || priceMin !== null || priceMax !== null);
+    const canUseCursor = sort === 'recommended' && !hasProductFilters;
 
     const toItems = (
       rows: any[],
@@ -2599,13 +3386,13 @@ export class SocialService {
     };
 
     if (tab === 'posts') {
-      const rankedCursor = this.parseRankedCursor(cursor);
+      const rankedCursor = canUseCursor ? this.parseRankedCursor(cursor) : null;
       const { data: ranked, error } = await this.serviceClient.rpc(
         'social_posts_ranked',
         {
           p_user_id: userId ?? null,
           p_query: searchQuery,
-          p_limit: limit,
+          p_limit: canUseCursor ? limit : fetchLimit,
           p_cursor_score: rankedCursor?.score ?? null,
           p_cursor_created_at: rankedCursor?.createdAt ?? null,
           p_cursor_id: rankedCursor?.id ?? null,
@@ -2631,30 +3418,40 @@ export class SocialService {
       const postIds = rows.map((row: any) => row.content_id);
       const postsRaw = await this.fetchPostsByIds(postIds);
       const posts = await this.enrichPosts(postsRaw, userId ?? null);
-      const items = toItems(rows, posts, [], []);
+      const items = this.applyExploreItemFiltersAndSort(
+        toItems(rows, posts, [], []),
+        {
+          tab,
+          sort,
+          category: categoryFilter,
+          priceMin,
+          priceMax,
+        },
+      ).slice(0, limit);
       const last = rows[Math.max(0, rows.length - 1)];
 
       return {
         tab,
         userId: userId ?? null,
         items,
-        nextCursor: last
-          ? this.buildRankedCursor({
-              score: Number(last.score),
-              createdAt: last.created_at,
-              id: String(last.post_id ?? last.content_id),
-            })
-          : null,
+        nextCursor:
+          canUseCursor && last
+            ? this.buildRankedCursor({
+                score: Number(last.score),
+                createdAt: last.created_at,
+                id: String(last.post_id ?? last.content_id),
+              })
+            : null,
       };
     }
 
     if (tab === 'reels') {
-      const rankedCursor = this.parseRankedCursor(cursor);
+      const rankedCursor = canUseCursor ? this.parseRankedCursor(cursor) : null;
       const { data: ranked, error } = await this.serviceClient.rpc(
         'social_reels_ranked',
         {
           p_user_id: userId ?? null,
-          p_limit: limit,
+          p_limit: canUseCursor ? limit : fetchLimit,
           p_cursor_score: rankedCursor?.score ?? null,
           p_cursor_created_at: rankedCursor?.createdAt ?? null,
           p_cursor_id: rankedCursor?.id ?? null,
@@ -2680,25 +3477,35 @@ export class SocialService {
       const reelIds = rows.map((row: any) => row.content_id);
       const reelsRaw = await this.fetchReelsByIds(reelIds);
       const reels = await this.enrichReels(reelsRaw, userId ?? null);
-      const items = toItems(rows, [], reels, []);
+      const items = this.applyExploreItemFiltersAndSort(
+        toItems(rows, [], reels, []),
+        {
+          tab,
+          sort,
+          category: categoryFilter,
+          priceMin,
+          priceMax,
+        },
+      ).slice(0, limit);
       const last = rows[Math.max(0, rows.length - 1)];
 
       return {
         tab,
         userId: userId ?? null,
         items,
-        nextCursor: last
-          ? this.buildRankedCursor({
-              score: Number(last.score),
-              createdAt: last.created_at,
-              id: String(last.reel_id ?? last.content_id),
-            })
-          : null,
+        nextCursor:
+          canUseCursor && last
+            ? this.buildRankedCursor({
+                score: Number(last.score),
+                createdAt: last.created_at,
+                id: String(last.reel_id ?? last.content_id),
+              })
+            : null,
       };
     }
 
     if (tab === 'shop') {
-      const rankedCursor = this.parseRankedCursor(cursor);
+      const rankedCursor = canUseCursor ? this.parseRankedCursor(cursor) : null;
       const ranked = await this.fetchProductsRankedWithCompatibility(
         {
           p_user_id: userId ?? null,
@@ -2712,12 +3519,12 @@ export class SocialService {
           p_size: null,
           p_color: null,
           p_dynamic_filters: null,
-          p_min_price: null,
-          p_max_price: null,
+          p_min_price: priceMin,
+          p_max_price: priceMax,
           p_radius_km: null,
           p_user_lat: null,
           p_user_lng: null,
-          p_limit: limit,
+          p_limit: canUseCursor ? limit : fetchLimit,
           p_cursor_score: rankedCursor?.score ?? null,
           p_cursor_created_at: rankedCursor?.createdAt ?? null,
           p_cursor_id: rankedCursor?.id ?? null,
@@ -2741,30 +3548,40 @@ export class SocialService {
       const productIds = rows.map((row: any) => row.content_id);
       const productsRaw = await this.fetchProductsByIds(productIds);
       const products = await this.enrichProducts(productsRaw, userId ?? null);
-      const items = toItems(rows, [], [], products);
+      const items = this.applyExploreItemFiltersAndSort(
+        toItems(rows, [], [], products),
+        {
+          tab,
+          sort,
+          category: categoryFilter,
+          priceMin,
+          priceMax,
+        },
+      ).slice(0, limit);
       const last = rows[Math.max(0, rows.length - 1)];
 
       return {
         tab,
         userId: userId ?? null,
         items,
-        nextCursor: last
-          ? this.buildRankedCursor({
-              score: Number(last.score),
-              createdAt: last.created_at,
-              id: String(last.product_id ?? last.content_id),
-            })
-          : null,
+        nextCursor:
+          canUseCursor && last
+            ? this.buildRankedCursor({
+                score: Number(last.score),
+                createdAt: last.created_at,
+                id: String(last.product_id ?? last.content_id),
+              })
+            : null,
       };
     }
 
-    const allCursor = this.parseFeedCursor(cursor);
+    const allCursor = canUseCursor ? this.parseFeedCursor(cursor) : null;
     const { data: ranked, error } = await this.serviceClient.rpc(
       'social_explore_feed_ranked',
       {
         p_user_id: userId ?? null,
         p_query: searchQuery,
-        p_limit: limit,
+        p_limit: canUseCursor ? limit : fetchLimit,
         p_cursor_score: allCursor?.score ?? null,
         p_cursor_created_at: allCursor?.createdAt ?? null,
         p_cursor_content_type: allCursor?.contentType ?? null,
@@ -2799,20 +3616,30 @@ export class SocialService {
       this.enrichProducts(productsRaw, userId ?? null),
     ]);
 
-    const items = toItems(rows, posts, reels, products);
+    const items = this.applyExploreItemFiltersAndSort(
+      toItems(rows, posts, reels, products),
+      {
+        tab,
+        sort,
+        category: categoryFilter,
+        priceMin,
+        priceMax,
+      },
+    ).slice(0, limit);
     const lastRow = rows[Math.max(0, rows.length - 1)];
     return {
       tab,
       userId: userId ?? null,
       items,
-      nextCursor: lastRow
-        ? this.buildFeedCursor({
-            createdAt: lastRow.created_at,
-            score: Number(lastRow.score),
-            contentType: this.normalizeContentType(lastRow.content_type),
-            id: String(lastRow.content_id),
-          })
-        : null,
+      nextCursor:
+        canUseCursor && lastRow
+          ? this.buildFeedCursor({
+              createdAt: lastRow.created_at,
+              score: Number(lastRow.score),
+              contentType: this.normalizeContentType(lastRow.content_type),
+              id: String(lastRow.content_id),
+            })
+          : null,
     };
   }
 
@@ -2827,26 +3654,26 @@ export class SocialService {
       }),
       this.fetchProductsRankedWithCompatibility(
         {
-        p_user_id: userId ?? null,
-        p_query: null,
-        p_listing_type: null,
-        p_category_id: null,
-        p_subcategory_id: null,
-        p_sub_subcategory_id: null,
-        p_condition: null,
-        p_brand: null,
-        p_size: null,
-        p_color: null,
-        p_dynamic_filters: null,
-        p_min_price: null,
-        p_max_price: null,
-        p_radius_km: null,
-        p_user_lat: null,
-        p_user_lng: null,
-        p_limit: 12,
-        p_cursor_score: null,
-        p_cursor_created_at: null,
-        p_cursor_id: null,
+          p_user_id: userId ?? null,
+          p_query: null,
+          p_listing_type: null,
+          p_category_id: null,
+          p_subcategory_id: null,
+          p_sub_subcategory_id: null,
+          p_condition: null,
+          p_brand: null,
+          p_size: null,
+          p_color: null,
+          p_dynamic_filters: null,
+          p_min_price: null,
+          p_max_price: null,
+          p_radius_km: null,
+          p_user_lat: null,
+          p_user_lng: null,
+          p_limit: 12,
+          p_cursor_score: null,
+          p_cursor_created_at: null,
+          p_cursor_id: null,
         },
         'Failed to fetch explore products',
       ),
@@ -2887,6 +3714,30 @@ export class SocialService {
       trendingProducts,
       topSellers: sellers.data ?? [],
     };
+  }
+
+  async getCachedExplore(userId?: string | null, locale?: string) {
+    const safeLocale = this.normalizeLocale(locale);
+    const key = this.readCacheKey('social:explore', {
+      userId: userId ?? null,
+      locale: safeLocale,
+    });
+    return this.getOrSetReadCache(key, async () => {
+      try {
+        const data = await this.getExplore(userId ?? null);
+        return { ...data, locale: safeLocale };
+      } catch {
+        return {
+          topReels: [],
+          trendingProducts: [],
+          topSellers: [],
+          locale: safeLocale,
+          status: 'error',
+          message: 'Explore data is temporarily unavailable.',
+          retryable: true,
+        };
+      }
+    });
   }
 
   async getReels(
@@ -3063,6 +3914,905 @@ export class SocialService {
     return Array.from(grouped.values())
       .sort((a, b) => b.latest_created_at.localeCompare(a.latest_created_at))
       .map(({ latest_created_at, ...item }) => item);
+  }
+
+  private normalizeLiveStatus(
+    value?: string | null,
+  ): 'scheduled' | 'live' | 'ended' | null {
+    const normalized = String(value ?? '')
+      .trim()
+      .toLowerCase();
+    if (!normalized) return null;
+    if (
+      normalized === 'scheduled' ||
+      normalized === 'live' ||
+      normalized === 'ended'
+    ) {
+      return normalized;
+    }
+    return null;
+  }
+
+  private isLiveReplayExpired(session: Record<string, any>): boolean {
+    if (session.status !== 'ended') return false;
+    const expiresRaw = String(session.replay_expires_at ?? '').trim();
+    if (!expiresRaw) return false;
+    const expiresAt = new Date(expiresRaw).getTime();
+    if (!Number.isFinite(expiresAt)) return false;
+    return expiresAt <= Date.now();
+  }
+
+  private async getLiveSessionOrThrow(sessionId: string) {
+    const { data: session, error: sessionError } = await this.serviceClient
+      .from('social_live_sessions')
+      .select('*')
+      .eq('id', sessionId)
+      .maybeSingle();
+    if (sessionError) {
+      throw new BadRequestException(
+        `Failed to fetch live session: ${sessionError.message}`,
+      );
+    }
+    if (!session) {
+      throw new NotFoundException('Live session not found');
+    }
+    return session;
+  }
+
+  private async assertLiveSessionStatus(sessionId: string, expected: 'live') {
+    const session = await this.getLiveSessionOrThrow(sessionId);
+    if (session.status !== expected) {
+      throw new BadRequestException(
+        `Live session must be ${expected} to perform this action`,
+      );
+    }
+    if (this.isLiveReplayExpired(session)) {
+      throw new NotFoundException('Live replay expired');
+    }
+    return session;
+  }
+
+  private async getActiveViewerCounts(sessionIds: string[]) {
+    const normalizedIds = Array.from(
+      new Set(
+        sessionIds.map((value) => String(value ?? '').trim()).filter(Boolean),
+      ),
+    );
+    const counters = new Map<string, number>();
+    normalizedIds.forEach((id) => counters.set(id, 0));
+
+    if (!normalizedIds.length) {
+      return counters;
+    }
+
+    const cutoffIso = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    const { data, error } = await this.serviceClient
+      .from('social_live_viewers')
+      .select('session_id')
+      .in('session_id', normalizedIds)
+      .is('left_at', null)
+      .gte('last_seen_at', cutoffIso);
+    if (error) {
+      throw new BadRequestException(
+        `Failed to fetch active live viewers: ${error.message}`,
+      );
+    }
+
+    for (const row of data ?? []) {
+      const key = String(row.session_id ?? '').trim();
+      if (!key) continue;
+      counters.set(key, Number(counters.get(key) ?? 0) + 1);
+    }
+    return counters;
+  }
+
+  private async syncLiveViewerCount(sessionId: string): Promise<number> {
+    const counts = await this.getActiveViewerCounts([sessionId]);
+    const active = Number(counts.get(sessionId) ?? 0);
+    const { error } = await this.serviceClient
+      .from('social_live_sessions')
+      .update({ viewer_count: active })
+      .eq('id', sessionId);
+    if (error) {
+      throw new BadRequestException(
+        `Failed to sync live viewer count: ${error.message}`,
+      );
+    }
+    return active;
+  }
+
+  private serializeLiveSession(
+    session: Record<string, any>,
+    profile:
+      | {
+          username?: string | null;
+          display_name?: string | null;
+          avatar_url?: string | null;
+        }
+      | undefined,
+    viewerUserId: string | null | undefined,
+    viewerCountActive: number,
+  ) {
+    const hasReplayExpired = this.isLiveReplayExpired(session);
+    const replayUrl = hasReplayExpired ? null : (session.replay_url ?? null);
+    const playbackHlsUrl = hasReplayExpired
+      ? null
+      : (session.playback_hls_url ?? session.playback_url ?? null);
+    return {
+      id: session.id,
+      host_id: session.host_id,
+      username: profile?.username ?? null,
+      display_name: profile?.display_name ?? null,
+      avatar_url: profile?.avatar_url ?? null,
+      title: session.title,
+      topic: session.topic,
+      cover_image_url: session.cover_image_url,
+      cover_media_path: session.cover_media_path ?? null,
+      status: session.status,
+      provider: session.provider ?? 'livekit',
+      provider_room_id: session.provider_room_id ?? null,
+      playback_hls_url: playbackHlsUrl,
+      playback_url: playbackHlsUrl,
+      replay_url: replayUrl,
+      replay_expires_at: session.replay_expires_at ?? null,
+      viewer_count: Number(session.viewer_count ?? viewerCountActive ?? 0),
+      viewer_count_active: Number(viewerCountActive ?? 0),
+      started_at: session.started_at,
+      ended_at: session.ended_at,
+      status_changed_at: session.status_changed_at ?? null,
+      created_at: session.created_at,
+      updated_at: session.updated_at,
+      is_host: Boolean(viewerUserId) && session.host_id === viewerUserId,
+    };
+  }
+
+  async getLiveSessions(
+    viewerUserId?: string | null,
+    status?: string,
+    limitValue?: string | number,
+  ) {
+    const limit = this.sanitizeLimit(limitValue, 20, 60);
+    const normalizedStatus = this.normalizeLiveStatus(status);
+
+    let query = this.serviceClient
+      .from('social_live_sessions')
+      .select('*')
+      .order('started_at', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (normalizedStatus) {
+      query = query.eq('status', normalizedStatus);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      throw new BadRequestException(
+        `Failed to fetch live sessions: ${error.message}`,
+      );
+    }
+
+    const rows = (data ?? []).filter((row) => !this.isLiveReplayExpired(row));
+    const profiles = await this.getProfilesMap(rows.map((row) => row.host_id));
+    const viewerCounts = await this.getActiveViewerCounts(
+      rows.map((row) => row.id),
+    );
+
+    return rows.map((row) => {
+      const profile = profiles.get(row.host_id);
+      const viewerCountActive = Number(viewerCounts.get(row.id) ?? 0);
+      return this.serializeLiveSession(
+        row,
+        profile,
+        viewerUserId,
+        viewerCountActive,
+      );
+    });
+  }
+
+  async getLiveSessionDetail(
+    viewerUserId: string | null,
+    sessionId: string,
+    messageLimitValue?: string | number,
+  ) {
+    const session = await this.getLiveSessionOrThrow(sessionId);
+    if (this.isLiveReplayExpired(session)) {
+      throw new NotFoundException('Live replay expired');
+    }
+
+    const profiles = await this.getProfilesMap([session.host_id]);
+    const hostProfile = profiles.get(session.host_id);
+
+    const { data: pinnedRows, error: pinnedError } = await this.serviceClient
+      .from('social_live_products')
+      .select('product_id, pinned_at, position')
+      .eq('session_id', sessionId)
+      .order('position', { ascending: true })
+      .order('pinned_at', { ascending: false });
+    if (pinnedError) {
+      throw new BadRequestException(
+        `Failed to fetch live products: ${pinnedError.message}`,
+      );
+    }
+
+    const pinned = pinnedRows ?? [];
+    const productIds = pinned.map((row) => row.product_id);
+    const productsRaw = await this.fetchProductsByIds(productIds);
+    const products = await this.enrichProducts(productsRaw, viewerUserId);
+    const productsMap = new Map(products.map((item) => [item.id, item]));
+    const pinnedProducts = pinned
+      .map((row) => productsMap.get(row.product_id))
+      .filter(Boolean);
+
+    const messageLimit = this.sanitizeLimit(messageLimitValue, 30, 100);
+    const { data: messageRows, error: messageError } = await this.serviceClient
+      .from('social_live_messages')
+      .select('*')
+      .eq('session_id', sessionId)
+      .order('created_at', { ascending: false })
+      .limit(messageLimit);
+    if (messageError) {
+      throw new BadRequestException(
+        `Failed to fetch live messages: ${messageError.message}`,
+      );
+    }
+
+    const messagesRaw = messageRows ?? [];
+    const messageUsers = await this.getProfilesMap(
+      messagesRaw.map((row) => row.user_id),
+    );
+    const messages = messagesRaw
+      .slice()
+      .reverse()
+      .map((row) => {
+        const user = messageUsers.get(row.user_id);
+        return {
+          id: row.id,
+          session_id: row.session_id,
+          user_id: row.user_id,
+          username: user?.username ?? null,
+          display_name: user?.display_name ?? null,
+          avatar_url: user?.avatar_url ?? null,
+          body: row.body,
+          created_at: row.created_at,
+        };
+      });
+
+    const viewerCountActive = await this.syncLiveViewerCount(session.id);
+
+    return {
+      session: this.serializeLiveSession(
+        session,
+        hostProfile,
+        viewerUserId,
+        viewerCountActive,
+      ),
+      pinnedProducts,
+      messages,
+    };
+  }
+
+  async createLiveSession(userId: string, payload: any) {
+    const title = String(payload?.title ?? '').trim();
+    if (!title) {
+      throw new BadRequestException('Live session title is required');
+    }
+    const topic = String(payload?.topic ?? '').trim() || null;
+    const coverImageUrl = String(payload?.coverImageUrl ?? '').trim() || null;
+    const coverMediaPath =
+      String(
+        payload?.coverMediaPath ?? payload?.cover_media_path ?? '',
+      ).trim() || null;
+    const playbackUrl =
+      String(payload?.playbackUrl ?? payload?.playbackHlsUrl ?? '').trim() ||
+      null;
+    const provider = 'livekit';
+    const nowIso = new Date().toISOString();
+
+    const { data, error } = await this.serviceClient
+      .from('social_live_sessions')
+      .insert({
+        host_id: userId,
+        title,
+        topic,
+        cover_image_url: coverImageUrl,
+        cover_media_path: coverMediaPath,
+        provider,
+        playback_url: playbackUrl,
+        playback_hls_url: playbackUrl,
+        status: 'scheduled',
+        status_changed_at: nowIso,
+      })
+      .select('*')
+      .single();
+    if (error || !data) {
+      throw new BadRequestException(
+        `Failed to create live session: ${error?.message}`,
+      );
+    }
+
+    return this.getLiveSessionDetail(userId, data.id);
+  }
+
+  async uploadLiveCover(
+    userId: string,
+    sessionId: string,
+    file: Express.Multer.File | undefined,
+  ) {
+    const session = await this.getLiveSessionOrThrow(sessionId);
+    if (session.host_id !== userId) {
+      throw new ForbiddenException('Only the host can update live cover');
+    }
+
+    const uploaded = await this.socialUploadService.uploadMedia(
+      userId,
+      file,
+      'live_cover',
+    );
+
+    const { error } = await this.serviceClient
+      .from('social_live_sessions')
+      .update({
+        cover_image_url: uploaded.url,
+        cover_media_path: uploaded.path,
+      })
+      .eq('id', sessionId);
+    if (error) {
+      throw new BadRequestException(
+        `Failed to update live cover: ${error.message}`,
+      );
+    }
+
+    return {
+      cover_image_url: uploaded.url,
+      cover_media_path: uploaded.path,
+      session: await this.getLiveSessionDetail(userId, sessionId),
+    };
+  }
+
+  async goLiveSession(
+    userId: string,
+    sessionId: string,
+    payload: { playbackUrl?: string; playbackHlsUrl?: string } = {},
+  ) {
+    const session = await this.getLiveSessionOrThrow(sessionId);
+    if (session.host_id !== userId) {
+      throw new ForbiddenException('Only the host can start this session');
+    }
+    if (session.status === 'ended') {
+      throw new BadRequestException('Ended live sessions cannot be restarted');
+    }
+
+    const room = this.socialLiveProviderService.createRoom({
+      sessionId,
+      hostId: userId,
+      title: String(session.title ?? 'Live session'),
+    });
+    const nowIso = new Date().toISOString();
+    const playbackHlsUrl =
+      String(payload?.playbackHlsUrl ?? '').trim() ||
+      String(payload?.playbackUrl ?? '').trim() ||
+      String(session.playback_hls_url ?? session.playback_url ?? '').trim() ||
+      null;
+
+    const { error } = await this.serviceClient
+      .from('social_live_sessions')
+      .update({
+        status: 'live',
+        provider: room.provider,
+        provider_room_id: room.providerRoomId,
+        playback_hls_url: playbackHlsUrl,
+        playback_url: playbackHlsUrl,
+        started_at: session.started_at ?? nowIso,
+        ended_at: null,
+        replay_url: null,
+        replay_expires_at: null,
+        status_changed_at: nowIso,
+      })
+      .eq('id', sessionId);
+    if (error) {
+      throw new BadRequestException(
+        `Failed to start live session: ${error.message}`,
+      );
+    }
+
+    const detail = await this.getLiveSessionDetail(userId, sessionId);
+    return {
+      ...detail,
+      live_access: {
+        provider: room.provider,
+        provider_room_id: room.providerRoomId,
+        host_token: room.hostToken,
+        viewer_join_url: room.viewerJoinUrl,
+      },
+    };
+  }
+
+  async startLiveSession(userId: string, sessionId: string, payload: any) {
+    return this.goLiveSession(userId, sessionId, payload ?? {});
+  }
+
+  async endLiveSession(userId: string, sessionId: string) {
+    const session = await this.getLiveSessionOrThrow(sessionId);
+    if (session.host_id !== userId) {
+      throw new ForbiddenException('Only the host can end this session');
+    }
+    if (session.status === 'scheduled') {
+      throw new BadRequestException(
+        'Session must be live before it can be ended',
+      );
+    }
+    if (session.status === 'ended') {
+      return this.getLiveSessionDetail(userId, sessionId);
+    }
+
+    const nowIso = new Date().toISOString();
+    const replayExpiresAt = new Date(
+      Date.now() + 24 * 60 * 60 * 1000,
+    ).toISOString();
+    if (session.provider_room_id) {
+      this.socialLiveProviderService.endRoom(session.provider_room_id);
+    }
+
+    const { error: updateError } = await this.serviceClient
+      .from('social_live_sessions')
+      .update({
+        status: 'ended',
+        ended_at: nowIso,
+        replay_expires_at: replayExpiresAt,
+        replay_url:
+          String(session.replay_url ?? '').trim() ||
+          String(
+            session.playback_hls_url ?? session.playback_url ?? '',
+          ).trim() ||
+          null,
+        status_changed_at: nowIso,
+        viewer_count: 0,
+      })
+      .eq('id', sessionId);
+    if (updateError) {
+      throw new BadRequestException(
+        `Failed to end live session: ${updateError?.message}`,
+      );
+    }
+
+    const { error: presenceError } = await this.serviceClient
+      .from('social_live_viewers')
+      .update({
+        left_at: nowIso,
+        last_seen_at: nowIso,
+      })
+      .eq('session_id', sessionId)
+      .is('left_at', null);
+    if (presenceError) {
+      throw new BadRequestException(
+        `Failed to close live presence: ${presenceError.message}`,
+      );
+    }
+
+    return this.getLiveSessionDetail(userId, sessionId);
+  }
+
+  async joinLiveSession(userId: string, sessionId: string) {
+    await this.assertLiveSessionStatus(sessionId, 'live');
+    const nowIso = new Date().toISOString();
+
+    const { error: updateError } = await this.serviceClient
+      .from('social_live_viewers')
+      .upsert(
+        {
+          session_id: sessionId,
+          user_id: userId,
+          joined_at: nowIso,
+          last_seen_at: nowIso,
+          left_at: null,
+        },
+        {
+          onConflict: 'session_id,user_id',
+        },
+      );
+    if (updateError) {
+      throw new BadRequestException(
+        `Failed to join live session: ${updateError.message}`,
+      );
+    }
+
+    const viewerCountActive = await this.syncLiveViewerCount(sessionId);
+    return {
+      joined: true,
+      viewer_count: viewerCountActive,
+      viewer_count_active: viewerCountActive,
+    };
+  }
+
+  async heartbeatLivePresence(userId: string, sessionId: string) {
+    await this.assertLiveSessionStatus(sessionId, 'live');
+    const nowIso = new Date().toISOString();
+
+    const { data: updatedRows, error: updateError } = await this.serviceClient
+      .from('social_live_viewers')
+      .update({
+        last_seen_at: nowIso,
+        left_at: null,
+      })
+      .eq('session_id', sessionId)
+      .eq('user_id', userId)
+      .select('session_id')
+      .limit(1);
+    if (updateError) {
+      throw new BadRequestException(
+        `Failed to refresh live presence: ${updateError.message}`,
+      );
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      const { error: insertError } = await this.serviceClient
+        .from('social_live_viewers')
+        .insert({
+          session_id: sessionId,
+          user_id: userId,
+          joined_at: nowIso,
+          last_seen_at: nowIso,
+          left_at: null,
+        });
+      if (insertError) {
+        throw new BadRequestException(
+          `Failed to initialize live presence: ${insertError.message}`,
+        );
+      }
+    }
+
+    const viewerCountActive = await this.syncLiveViewerCount(sessionId);
+    return {
+      heartbeat: true,
+      viewer_count: viewerCountActive,
+      viewer_count_active: viewerCountActive,
+    };
+  }
+
+  async leaveLiveSession(userId: string, sessionId: string) {
+    await this.getLiveSessionOrThrow(sessionId);
+    const nowIso = new Date().toISOString();
+
+    const { error: updateError } = await this.serviceClient
+      .from('social_live_viewers')
+      .update({
+        left_at: nowIso,
+        last_seen_at: nowIso,
+      })
+      .eq('session_id', sessionId)
+      .eq('user_id', userId)
+      .is('left_at', null);
+    if (updateError) {
+      throw new BadRequestException(
+        `Failed to leave live session: ${updateError.message}`,
+      );
+    }
+
+    const viewerCountActive = await this.syncLiveViewerCount(sessionId);
+    return {
+      left: true,
+      viewer_count: viewerCountActive,
+      viewer_count_active: viewerCountActive,
+    };
+  }
+
+  async getLiveViewerToken(userId: string, sessionId: string) {
+    const session = await this.assertLiveSessionStatus(sessionId, 'live');
+    const providerRoomId =
+      String(session.provider_room_id ?? '').trim() || `live-${session.id}`;
+    const viewerToken = this.socialLiveProviderService.createViewerToken(
+      sessionId,
+      userId,
+      providerRoomId,
+    );
+    const presence = await this.heartbeatLivePresence(userId, sessionId);
+
+    return {
+      session_id: sessionId,
+      provider: viewerToken.provider,
+      provider_room_id: providerRoomId,
+      viewer_token: viewerToken.viewerToken,
+      viewer_join_url: viewerToken.viewerJoinUrl,
+      viewer_count: presence.viewer_count,
+      viewer_count_active: presence.viewer_count_active,
+    };
+  }
+
+  async createLiveMessage(
+    userId: string,
+    sessionId: string,
+    payload: { body?: string },
+  ) {
+    const body = String(payload?.body ?? '').trim();
+    if (!body) {
+      throw new BadRequestException('Message body is required');
+    }
+    if (body.length > 500) {
+      throw new BadRequestException('Message body exceeds 500 characters');
+    }
+
+    await this.assertLiveSessionStatus(sessionId, 'live');
+
+    const recentThreshold = new Date(Date.now() - 30 * 1000).toISOString();
+    const { count: recentCount, error: throttleError } =
+      await this.serviceClient
+        .from('social_live_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('session_id', sessionId)
+        .eq('user_id', userId)
+        .gte('created_at', recentThreshold);
+    if (throttleError) {
+      throw new BadRequestException(
+        `Failed to verify live message throttle: ${throttleError.message}`,
+      );
+    }
+    if (Number(recentCount ?? 0) >= 8) {
+      throw new BadRequestException(
+        'You are sending messages too quickly. Please wait a moment.',
+      );
+    }
+
+    const { data, error } = await this.serviceClient
+      .from('social_live_messages')
+      .insert({
+        session_id: sessionId,
+        user_id: userId,
+        body,
+      })
+      .select('*')
+      .single();
+    if (error || !data) {
+      throw new BadRequestException(
+        `Failed to send live message: ${error?.message}`,
+      );
+    }
+
+    const profiles = await this.getProfilesMap([userId]);
+    const profile = profiles.get(userId);
+    return {
+      id: data.id,
+      session_id: data.session_id,
+      user_id: data.user_id,
+      username: profile?.username ?? null,
+      display_name: profile?.display_name ?? null,
+      avatar_url: profile?.avatar_url ?? null,
+      body: data.body,
+      created_at: data.created_at,
+    };
+  }
+
+  async createLiveReaction(
+    userId: string,
+    sessionId: string,
+    payload: { emoji?: string },
+  ) {
+    const emoji = String(payload?.emoji ?? '').trim();
+    if (!emoji) {
+      throw new BadRequestException('Reaction emoji is required');
+    }
+    if (emoji.length > 16) {
+      throw new BadRequestException('Reaction emoji is invalid');
+    }
+
+    await this.assertLiveSessionStatus(sessionId, 'live');
+
+    const recentThreshold = new Date(Date.now() - 60 * 1000).toISOString();
+    const { count: recentCount, error: throttleError } =
+      await this.serviceClient
+        .from('social_live_reactions')
+        .select('id', { count: 'exact', head: true })
+        .eq('session_id', sessionId)
+        .eq('user_id', userId)
+        .gte('created_at', recentThreshold);
+    if (throttleError) {
+      throw new BadRequestException(
+        `Failed to verify live reaction throttle: ${throttleError.message}`,
+      );
+    }
+    if (Number(recentCount ?? 0) >= 20) {
+      throw new BadRequestException(
+        'You are sending reactions too quickly. Please wait a moment.',
+      );
+    }
+
+    const { error } = await this.serviceClient
+      .from('social_live_reactions')
+      .insert({
+        session_id: sessionId,
+        user_id: userId,
+        emoji,
+      });
+    if (error) {
+      throw new BadRequestException(
+        `Failed to send live reaction: ${error.message}`,
+      );
+    }
+    return { success: true };
+  }
+
+  async pinLiveProduct(userId: string, sessionId: string, productId: string) {
+    const normalizedProductId = String(productId ?? '').trim();
+    if (!normalizedProductId) {
+      throw new BadRequestException('Product id is required');
+    }
+    const { data: session, error: sessionError } = await this.serviceClient
+      .from('social_live_sessions')
+      .select('host_id')
+      .eq('id', sessionId)
+      .maybeSingle();
+    if (sessionError) {
+      throw new BadRequestException(
+        `Failed to fetch live session: ${sessionError.message}`,
+      );
+    }
+    if (!session) {
+      throw new NotFoundException('Live session not found');
+    }
+    if (session.host_id !== userId) {
+      throw new ForbiddenException('Only the host can pin products');
+    }
+    const { data: product, error: productError } = await this.serviceClient
+      .from('social_products')
+      .select('id, seller_id, status')
+      .eq('id', normalizedProductId)
+      .maybeSingle();
+    if (productError) {
+      throw new BadRequestException(
+        `Failed to validate product for pinning: ${productError.message}`,
+      );
+    }
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+    if (product.seller_id !== userId) {
+      throw new ForbiddenException('Only host-owned products can be pinned');
+    }
+    const status = String(product.status ?? 'active')
+      .trim()
+      .toLowerCase();
+    if (
+      status === 'deleted' ||
+      status === 'archived' ||
+      status === 'inactive'
+    ) {
+      throw new BadRequestException('Only active products can be pinned');
+    }
+
+    const { error } = await this.serviceClient
+      .from('social_live_products')
+      .upsert(
+        {
+          session_id: sessionId,
+          product_id: normalizedProductId,
+          pinned_at: new Date().toISOString(),
+        },
+        {
+          onConflict: 'session_id,product_id',
+        },
+      );
+    if (error) {
+      throw new BadRequestException(`Failed to pin product: ${error.message}`);
+    }
+
+    return { success: true };
+  }
+
+  async unpinLiveProduct(userId: string, sessionId: string, productId: string) {
+    const normalizedProductId = String(productId ?? '').trim();
+    if (!normalizedProductId) {
+      throw new BadRequestException('Product id is required');
+    }
+    const { data: session, error: sessionError } = await this.serviceClient
+      .from('social_live_sessions')
+      .select('host_id')
+      .eq('id', sessionId)
+      .maybeSingle();
+    if (sessionError) {
+      throw new BadRequestException(
+        `Failed to fetch live session: ${sessionError.message}`,
+      );
+    }
+    if (!session) {
+      throw new NotFoundException('Live session not found');
+    }
+    if (session.host_id !== userId) {
+      throw new ForbiddenException('Only the host can unpin products');
+    }
+
+    const { error } = await this.serviceClient
+      .from('social_live_products')
+      .delete()
+      .eq('session_id', sessionId)
+      .eq('product_id', normalizedProductId);
+    if (error) {
+      throw new BadRequestException(
+        `Failed to unpin product: ${error.message}`,
+      );
+    }
+
+    return { success: true };
+  }
+
+  async handleLiveProviderWebhook(
+    webhookSecret: string | undefined,
+    payload: Record<string, unknown>,
+  ) {
+    const expectedSecret = String(
+      process.env.SOCIAL_LIVE_WEBHOOK_SECRET ?? '',
+    ).trim();
+    if (expectedSecret && webhookSecret !== expectedSecret) {
+      throw new UnauthorizedException('Invalid live provider webhook secret');
+    }
+
+    const parsed =
+      this.socialLiveProviderService.handleRecordingWebhook(payload);
+    if (!parsed.handled) {
+      return { success: false, handled: false };
+    }
+
+    let sessionId = String(parsed.sessionId ?? '').trim();
+    if (!sessionId && parsed.providerRoomId) {
+      const { data: sessionByRoom, error } = await this.serviceClient
+        .from('social_live_sessions')
+        .select('id')
+        .eq('provider_room_id', parsed.providerRoomId)
+        .maybeSingle();
+      if (error) {
+        throw new BadRequestException(
+          `Failed to resolve live session by provider room: ${error.message}`,
+        );
+      }
+      sessionId = String(sessionByRoom?.id ?? '').trim();
+    }
+
+    if (!sessionId) {
+      return { success: false, handled: true, reason: 'session_not_found' };
+    }
+
+    const { data: session, error: sessionError } = await this.serviceClient
+      .from('social_live_sessions')
+      .select('id, ended_at, replay_expires_at')
+      .eq('id', sessionId)
+      .maybeSingle();
+    if (sessionError) {
+      throw new BadRequestException(
+        `Failed to fetch webhook live session: ${sessionError.message}`,
+      );
+    }
+    if (!session) {
+      return { success: false, handled: true, reason: 'session_not_found' };
+    }
+
+    const replayExpiresAt =
+      session.replay_expires_at ??
+      (session.ended_at
+        ? new Date(
+            new Date(session.ended_at).getTime() + 24 * 60 * 60 * 1000,
+          ).toISOString()
+        : null);
+    const { error: updateError } = await this.serviceClient
+      .from('social_live_sessions')
+      .update({
+        replay_url: parsed.replayUrl ?? null,
+        replay_expires_at: replayExpiresAt,
+        playback_hls_url: parsed.playbackHlsUrl ?? null,
+        playback_url: parsed.playbackHlsUrl ?? null,
+      })
+      .eq('id', sessionId);
+    if (updateError) {
+      throw new BadRequestException(
+        `Failed to update live replay webhook payload: ${updateError.message}`,
+      );
+    }
+
+    return {
+      success: true,
+      handled: true,
+      session_id: sessionId,
+      event_type: parsed.eventType ?? null,
+      replay_url: parsed.replayUrl ?? null,
+      playback_hls_url: parsed.playbackHlsUrl ?? null,
+    };
   }
 
   async createStatuses(userId: string, payload: any) {
@@ -3255,12 +5005,294 @@ export class SocialService {
     });
   }
 
+  private normalizeProductSearchSort(sort?: string | null): ProductSearchSort {
+    const normalized = String(sort ?? '')
+      .trim()
+      .toLowerCase();
+    if (normalized === 'newest') return 'newest';
+    if (normalized === 'price_asc' || normalized === 'price-low')
+      return 'price_asc';
+    if (normalized === 'price_desc' || normalized === 'price-high')
+      return 'price_desc';
+    if (normalized === 'most_liked' || normalized === 'most-liked')
+      return 'most_liked';
+    if (normalized === 'trending') return 'trending';
+    return 'relevance';
+  }
+
+  private normalizeToken(value?: string | null): string {
+    return String(value ?? '')
+      .trim()
+      .toLowerCase();
+  }
+
+  private normalizeTokenList(values?: string[] | null): string[] {
+    if (!Array.isArray(values)) return [];
+    return Array.from(
+      new Set(
+        values
+          .map((entry) => this.normalizeToken(entry))
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  private normalizeConditionToken(value?: string | null): string {
+    const normalized = this.normalizeToken(value).replace(/[_-]+/g, ' ');
+    if (!normalized) return 'good';
+    if (normalized.includes('new') && !normalized.includes('like')) return 'new';
+    if (normalized.includes('like')) return 'like-new';
+    if (normalized.includes('very')) return 'very-good';
+    if (normalized.includes('fair')) return 'fair';
+    if (normalized.includes('part')) return 'parts';
+    return 'good';
+  }
+
+  private getOriginalPrice(product: any): number | null {
+    const details = Array.isArray(product?.additional_details)
+      ? product.additional_details
+      : [];
+    for (const detail of details) {
+      const key = this.normalizeToken(detail?.key);
+      if (
+        !key.includes('original') &&
+        !key.includes('retail') &&
+        !key.includes('msrp')
+      ) {
+        continue;
+      }
+      const parsed = Number(
+        String(detail?.value ?? '').replace(/[^\d.]/g, ''),
+      );
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  private inferSellerRating(product: any): number {
+    const profileRating = Number(product?.rating_avg ?? 0);
+    if (Number.isFinite(profileRating) && profileRating > 0) {
+      return Math.max(1, Math.min(5, profileRating));
+    }
+    const likes = Number(product?.likes_count ?? 0);
+    const followers = Number(product?.followers_count ?? 0);
+    if (followers >= 1500 || likes >= 500) return 5;
+    if (followers >= 450 || likes >= 120) return 4.5;
+    if (followers >= 120 || likes >= 30) return 4;
+    if (followers >= 30 || likes >= 8) return 3.5;
+    return 3;
+  }
+
+  private applyExtendedProductSearchFilters(
+    products: any[],
+    options: ProductSearchOptions | undefined,
+    followingSet: Set<string>,
+  ): any[] {
+    const sourceSet = new Set(this.normalizeTokenList(options?.source));
+    const availabilitySet = new Set(this.normalizeTokenList(options?.availability));
+    const ratingSet = new Set(this.normalizeTokenList(options?.rating));
+    const sellerTypeSet = new Set(this.normalizeTokenList(options?.sellerType));
+    const sellerSet = new Set(this.normalizeTokenList(options?.seller));
+    const extrasSet = new Set(this.normalizeTokenList(options?.extras));
+    const conditionSet = new Set(
+      this.normalizeTokenList(options?.conditionValues).map((entry) =>
+        this.normalizeConditionToken(entry),
+      ),
+    );
+    const brandSet = new Set(this.normalizeTokenList(options?.brandValues));
+    const sizeSet = new Set(this.normalizeTokenList(options?.sizeValues));
+    const colorSet = new Set(this.normalizeTokenList(options?.colorValues));
+    const locationNeedle = this.normalizeToken(options?.location);
+
+    return products.filter((product) => {
+      const available = Number(product?.available_quantity ?? product?.quantity ?? 0);
+      const price = Number(product?.price ?? 0);
+      const conditionToken = this.normalizeConditionToken(product?.condition);
+      const brandToken = this.normalizeToken(product?.brand);
+      const sizeToken = this.normalizeToken(product?.size);
+      const colorToken = this.normalizeToken(product?.color);
+      const sourceToken = this.normalizeToken(product?.source_type);
+      const sellerId = String(product?.user_id ?? '').trim();
+      const followers = Number(product?.followers_count ?? 0);
+      const sellerReputation = Number(product?.seller_reputation ?? 0);
+      const rating = this.inferSellerRating(product);
+      const handlingTimeDays = Number(product?.handling_time_days ?? 99);
+      const shippingCost = Number(product?.shipping_cost ?? 0);
+      const isExchangeable = Boolean(
+        product?.is_exchangeable ?? product?.allow_offers,
+      );
+      const originalPrice = this.getOriginalPrice(product);
+      const hasPriceDrop =
+        typeof originalPrice === 'number' && originalPrice > price;
+      const hasFlashSale =
+        hasPriceDrop && originalPrice > 0
+          ? ((originalPrice - price) / originalPrice) * 100 >= 25
+          : false;
+
+      if (conditionSet.size && !conditionSet.has(conditionToken)) return false;
+      if (brandSet.size && !brandSet.has(brandToken)) return false;
+      if (
+        sizeSet.size &&
+        !Array.from(sizeSet).some((token) => sizeToken.includes(token))
+      ) {
+        return false;
+      }
+      if (
+        colorSet.size &&
+        !Array.from(colorSet).some((token) => colorToken.includes(token))
+      ) {
+        return false;
+      }
+      if (sourceSet.size && !sourceSet.has(sourceToken)) return false;
+
+      if (
+        availabilitySet.size &&
+        !Array.from(availabilitySet).every((token) => {
+          if (token === 'in_stock') return available > 0;
+          if (token === 'offers') return isExchangeable;
+          if (token === 'flash_sale') return hasFlashSale;
+          if (token === 'ships_today') return handlingTimeDays <= 1;
+          return true;
+        })
+      ) {
+        return false;
+      }
+
+      if (ratingSet.size) {
+        const matchesAny = Array.from(ratingSet).some((token) => {
+          if (token === '5') return rating >= 4.95;
+          if (token === '4') return rating >= 4;
+          if (token === '3') return rating >= 3;
+          return true;
+        });
+        if (!matchesAny) return false;
+      }
+
+      if (
+        sellerTypeSet.size &&
+        !Array.from(sellerTypeSet).every((token) => {
+          if (token === 'verified') return sellerReputation >= 85;
+          if (token === 'top') return followers >= 500;
+          if (token === 'following')
+            return sellerId ? followingSet.has(sellerId) : false;
+          if (token === 'new') return followers < 50;
+          return true;
+        })
+      ) {
+        return false;
+      }
+
+      if (
+        sellerSet.size &&
+        !Array.from(sellerSet).every((token) => {
+          if (token === 'following')
+            return sellerId ? followingSet.has(sellerId) : false;
+          if (token === 'verified') return sellerReputation >= 85;
+          if (token === 'top') return followers >= 500;
+          if (token === 'rating45') return rating >= 4.5;
+          if (token === 'offers') return isExchangeable;
+          if (token === 'fastship') return handlingTimeDays <= 1;
+          return true;
+        })
+      ) {
+        return false;
+      }
+
+      if (
+        extrasSet.size &&
+        !Array.from(extrasSet).every((token) => {
+          if (token === 'photos')
+            return Array.isArray(product?.social_product_media)
+              ? product.social_product_media.length > 0
+              : false;
+          if (token === 'available') return available > 0;
+          if (token === 'free_shipping') return shippingCost <= 0;
+          if (token === 'price_drop') return hasPriceDrop;
+          if (token === 'added_today') {
+            const createdAt = new Date(product?.created_at ?? '');
+            if (Number.isNaN(createdAt.getTime())) return false;
+            return Date.now() - createdAt.getTime() <= 24 * 60 * 60 * 1000;
+          }
+          return true;
+        })
+      ) {
+        return false;
+      }
+
+      if (locationNeedle) {
+        const haystack = [
+          String(product?.city ?? ''),
+          String(product?.country ?? ''),
+          String(product?.shipping_info ?? ''),
+        ]
+          .join(' ')
+          .toLowerCase();
+        if (!haystack.includes(locationNeedle)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }
+
+  private sortProductSearchResults(
+    products: any[],
+    sortMode: ProductSearchSort,
+  ): any[] {
+    if (sortMode === 'relevance') return products;
+    const sorted = [...products];
+    if (sortMode === 'newest') {
+      sorted.sort((left, right) => {
+        const leftDate = new Date(left?.created_at ?? '').getTime();
+        const rightDate = new Date(right?.created_at ?? '').getTime();
+        return (Number.isFinite(rightDate) ? rightDate : 0) -
+          (Number.isFinite(leftDate) ? leftDate : 0);
+      });
+      return sorted;
+    }
+    if (sortMode === 'price_asc') {
+      sorted.sort(
+        (left, right) =>
+          Number(left?.price ?? 0) - Number(right?.price ?? 0),
+      );
+      return sorted;
+    }
+    if (sortMode === 'price_desc') {
+      sorted.sort(
+        (left, right) =>
+          Number(right?.price ?? 0) - Number(left?.price ?? 0),
+      );
+      return sorted;
+    }
+    if (sortMode === 'most_liked') {
+      sorted.sort(
+        (left, right) =>
+          Number(right?.likes_count ?? 0) - Number(left?.likes_count ?? 0),
+      );
+      return sorted;
+    }
+    if (sortMode === 'trending') {
+      const score = (product: any) =>
+        Number(product?.likes_count ?? 0) * 3 +
+        Number(product?.comment_count ?? 0) * 2 +
+        Number(product?.share_count ?? product?.shares_count ?? 0) * 2 +
+        Number(product?.views_count ?? 0) * 0.08;
+      sorted.sort((left, right) => score(right) - score(left));
+      return sorted;
+    }
+    return sorted;
+  }
+
   private async productSearch(
     listingType: ListingType | null,
     userId?: string | null,
     options?: ProductSearchOptions,
   ) {
-    const limit = this.sanitizeLimit(options?.limit, 20, 50);
+    const limit = this.sanitizeLimit(options?.limit, 20, 120);
+    const sortMode = this.normalizeProductSearchSort(options?.sort);
     const rankedCursor = this.parseRankedCursor(options?.cursor ?? null);
     const ranked = await this.fetchProductsRankedWithCompatibility(
       {
@@ -3296,17 +5328,31 @@ export class SocialService {
     const productsRaw = await this.fetchProductsByIds(ids);
     const products = await this.enrichProducts(productsRaw, userId ?? null);
     const map = new Map(products.map((item) => [item.id, item]));
-    const ordered = ids.map((id: string) => map.get(id)).filter(Boolean);
+    const ordered = ids
+      .map((id: string) => map.get(id))
+      .filter((entry): entry is any => Boolean(entry));
+    const followingSet = await this.getFollowingSetForViewer(
+      userId ?? null,
+      ordered.map((item) => String(item?.user_id ?? '')),
+    );
+    const filtered = this.applyExtendedProductSearchFilters(
+      ordered,
+      options,
+      followingSet,
+    );
+    const sorted = this.sortProductSearchResults(filtered, sortMode);
+    const paged = sorted.slice(0, limit);
     const last = (ranked ?? [])[Math.max(0, (ranked ?? []).length - 1)];
     return {
-      results: ordered,
-      nextCursor: last
-        ? this.buildRankedCursor({
-            score: Number(last.score),
-            createdAt: last.created_at,
-            id: last.product_id,
-          })
-        : null,
+      results: paged,
+      nextCursor:
+        sortMode === 'relevance' && paged.length === ordered.length && last
+          ? this.buildRankedCursor({
+              score: Number(last.score),
+              createdAt: last.created_at,
+              id: last.product_id,
+            })
+          : null,
     };
   }
 
@@ -3322,6 +5368,60 @@ export class SocialService {
     options?: ProductSearchOptions,
   ) {
     return this.productSearch('closet', userId ?? null, options);
+  }
+
+  async getCachedShopSearch(
+    userId: string | null | undefined,
+    options?: ProductSearchOptions & { locale?: string },
+  ) {
+    const safeLocale = this.normalizeLocale(options?.locale);
+    const key = this.readCacheKey('social:shop-search', {
+      userId: userId ?? null,
+      locale: safeLocale,
+      options: options ?? null,
+    });
+    return this.getOrSetReadCache(key, async () => {
+      try {
+        const data = await this.getShopSearch(userId ?? null, options);
+        return { ...data, locale: safeLocale };
+      } catch {
+        return {
+          results: [],
+          nextCursor: null,
+          locale: safeLocale,
+          status: 'error',
+          message: 'Shop results are temporarily unavailable.',
+          retryable: true,
+        };
+      }
+    });
+  }
+
+  async getCachedClosetSearch(
+    userId: string | null | undefined,
+    options?: ProductSearchOptions & { locale?: string },
+  ) {
+    const safeLocale = this.normalizeLocale(options?.locale);
+    const key = this.readCacheKey('social:closet-search', {
+      userId: userId ?? null,
+      locale: safeLocale,
+      options: options ?? null,
+    });
+    return this.getOrSetReadCache(key, async () => {
+      try {
+        const data = await this.getClosetSearch(userId ?? null, options);
+        return { ...data, locale: safeLocale };
+      } catch {
+        return {
+          results: [],
+          nextCursor: null,
+          locale: safeLocale,
+          status: 'error',
+          message: 'Closet results are temporarily unavailable.',
+          retryable: true,
+        };
+      }
+    });
   }
 
   private async resolveProfileByUsername(username: string) {
@@ -3822,6 +5922,345 @@ export class SocialService {
       cursor: options?.cursor,
       excludeFollowed: false,
     });
+  }
+
+  private normalizeGlobalSearchScope(scope?: string): SocialSearchScope {
+    const normalized = String(scope ?? '')
+      .trim()
+      .toLowerCase();
+    const allowed: SocialSearchScope[] = [
+      'all',
+      'users',
+      'posts',
+      'reels',
+      'shop',
+      'closet',
+      'products',
+      'exchange',
+    ];
+    if (!normalized) return 'all';
+    return allowed.includes(normalized as SocialSearchScope)
+      ? (normalized as SocialSearchScope)
+      : 'all';
+  }
+
+  async searchGlobal(
+    viewerUserId: string | null | undefined,
+    options?: SocialGlobalSearchOptions,
+  ) {
+    const query = this.sanitizeSearchTerm(options?.q) ?? '';
+    const scope = this.normalizeGlobalSearchScope(options?.scope);
+    const limit = this.sanitizeLimit(options?.limit, 24, 60);
+    const locale = this.normalizeLocale(options?.locale);
+    const perGroup =
+      scope === 'all' ? Math.max(4, Math.ceil(limit / 6)) : limit;
+
+    const groups: Array<{
+      key: SocialSearchScope;
+      status: 'ok' | 'empty' | 'error';
+      items: unknown[];
+      nextCursor: string | null;
+      message?: string;
+    }> = [];
+
+    const include = (group: SocialSearchScope) =>
+      scope === 'all' || scope === group;
+
+    if (include('users')) {
+      try {
+        const users = await this.searchUsers(viewerUserId, {
+          q: query,
+          limit: perGroup,
+          cursor: options?.cursor,
+        });
+        groups.push({
+          key: 'users',
+          status: users.items.length ? 'ok' : 'empty',
+          items: users.items,
+          nextCursor: users.nextCursor ?? null,
+        });
+      } catch (error) {
+        groups.push({
+          key: 'users',
+          status: 'error',
+          items: [],
+          nextCursor: null,
+          message:
+            error instanceof Error ? error.message : 'Unable to load users',
+        });
+      }
+    }
+
+    const hydrateContent = async (
+      contentType: 'posts' | 'reels',
+      table: 'social_posts' | 'social_reels',
+      selectFields: string,
+      queryField: string,
+    ) => {
+      if (!include(contentType)) return;
+      try {
+        let builder = this.serviceClient
+          .from(table)
+          .select(selectFields)
+          .eq('status', 'published')
+          .order('created_at', { ascending: false })
+          .limit(perGroup);
+        if (query) {
+          builder = builder.ilike(queryField, `%${query}%`);
+        }
+        const { data, error } = await builder;
+        if (error) throw new Error(error.message);
+        const rows = data ?? [];
+        const enriched =
+          contentType === 'posts'
+            ? await this.enrichPosts(rows, viewerUserId ?? null)
+            : await this.enrichReels(rows, viewerUserId ?? null);
+        groups.push({
+          key: contentType,
+          status: enriched.length ? 'ok' : 'empty',
+          items: enriched,
+          nextCursor: null,
+        });
+      } catch (error) {
+        groups.push({
+          key: contentType,
+          status: 'error',
+          items: [],
+          nextCursor: null,
+          message:
+            error instanceof Error
+              ? error.message
+              : `Unable to load ${contentType}`,
+        });
+      }
+    };
+
+    await hydrateContent(
+      'posts',
+      'social_posts',
+      'id, user_id, caption, hashtags, created_at, reactions_count, comments_count, saves_count, shares_count, is_comments_enabled',
+      'caption',
+    );
+    await hydrateContent(
+      'reels',
+      'social_reels',
+      'id, user_id, caption, reel_url, thumbnail_url, category, views_count, likes_count, comments_count, saves_count, shares_count, created_at, status',
+      'caption',
+    );
+
+    const appendProductsGroup = async (
+      groupKey: 'products' | 'shop' | 'closet',
+      listingType: ListingType | null,
+    ) => {
+      if (!include(groupKey)) return;
+      try {
+        const ranked = await this.fetchProductsRankedWithCompatibility(
+          {
+            p_user_id: viewerUserId ?? null,
+            p_query: query || null,
+            p_listing_type: listingType,
+            p_category_id: null,
+            p_subcategory_id: null,
+            p_sub_subcategory_id: null,
+            p_condition: null,
+            p_brand: null,
+            p_size: null,
+            p_color: null,
+            p_dynamic_filters: null,
+            p_min_price: null,
+            p_max_price: null,
+            p_radius_km: null,
+            p_user_lat: null,
+            p_user_lng: null,
+            p_limit: perGroup,
+            p_cursor_score: null,
+            p_cursor_created_at: null,
+            p_cursor_id: null,
+          },
+          'Failed to search products',
+        );
+        const ids = (ranked ?? []).map((row: any) => row.product_id);
+        const rows = await this.fetchProductsByIds(ids);
+        const enriched = await this.enrichProducts(rows, viewerUserId ?? null);
+        const map = new Map(enriched.map((item) => [item.id, item]));
+        const ordered = ids.map((id: string) => map.get(id)).filter(Boolean);
+        groups.push({
+          key: groupKey,
+          status: ordered.length ? 'ok' : 'empty',
+          items: ordered,
+          nextCursor: null,
+        });
+      } catch (error) {
+        groups.push({
+          key: groupKey,
+          status: 'error',
+          items: [],
+          nextCursor: null,
+          message:
+            error instanceof Error ? error.message : 'Unable to load products',
+        });
+      }
+    };
+
+    await appendProductsGroup('products', null);
+    await appendProductsGroup('shop', 'shop');
+    await appendProductsGroup('closet', 'closet');
+
+    if (include('exchange')) {
+      try {
+        let listingsQuery = this.serviceClient
+          .from('social_swap_listings')
+          .select('*')
+          .eq('status', 'open')
+          .order('created_at', { ascending: false })
+          .limit(perGroup);
+        if (query) {
+          listingsQuery = listingsQuery.or(
+            `title.ilike.%${query}%,description.ilike.%${query}%`,
+          );
+        }
+        const { data: listingRows, error: listingError } = await listingsQuery;
+        if (listingError) throw new Error(listingError.message);
+        const hydrated = await this.hydrateSwapListings(
+          (listingRows ?? []).filter((listing) => {
+            if (!listing.expires_at) return true;
+            const expiresMs = new Date(String(listing.expires_at)).getTime();
+            return Number.isNaN(expiresMs) || expiresMs > Date.now();
+          }),
+          viewerUserId ?? null,
+        );
+        groups.push({
+          key: 'exchange',
+          status: hydrated.length ? 'ok' : 'empty',
+          items: hydrated,
+          nextCursor: null,
+        });
+      } catch (error) {
+        groups.push({
+          key: 'exchange',
+          status: 'error',
+          items: [],
+          nextCursor: null,
+          message:
+            error instanceof Error ? error.message : 'Unable to load exchange',
+        });
+      }
+    }
+
+    const hasData = groups.some((group) => group.items.length > 0);
+    return {
+      query,
+      scope,
+      locale,
+      groups,
+      nextCursor: null,
+      status: hasData ? 'ok' : 'empty',
+      retryable: groups.some((group) => group.status === 'error'),
+    };
+  }
+
+  async getSavedSearches(userId: string) {
+    const { data, error } = await this.serviceClient
+      .from('social_saved_searches')
+      .select('*')
+      .eq('user_id', userId)
+      .order('last_used_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false });
+    const source = `${error?.message ?? ''}`.toLowerCase();
+    if (
+      error &&
+      source.includes('social_saved_searches') &&
+      source.includes('does not exist')
+    ) {
+      return [];
+    }
+    if (error) {
+      throw new BadRequestException(
+        `Failed to load saved searches: ${error.message}`,
+      );
+    }
+    return data ?? [];
+  }
+
+  async createSavedSearch(userId: string, payload: SavedSearchPayload) {
+    const query = String(payload?.query ?? '').trim();
+    if (!query) {
+      throw new BadRequestException('query is required');
+    }
+    const scope = this.normalizeGlobalSearchScope(payload?.scope);
+    const filters =
+      payload?.filters && typeof payload.filters === 'object'
+        ? payload.filters
+        : null;
+
+    const nowIso = new Date().toISOString();
+    const { data: existing } = await this.serviceClient
+      .from('social_saved_searches')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('scope', scope)
+      .ilike('query', query)
+      .limit(1)
+      .maybeSingle();
+
+    if (existing?.id) {
+      const { data: updated, error: updateError } = await this.serviceClient
+        .from('social_saved_searches')
+        .update({
+          query,
+          filters,
+          last_used_at: nowIso,
+        })
+        .eq('id', existing.id)
+        .eq('user_id', userId)
+        .select('*')
+        .single();
+      if (updateError || !updated) {
+        throw new BadRequestException(
+          `Failed to update saved search: ${updateError?.message}`,
+        );
+      }
+      return updated;
+    }
+
+    const { data, error } = await this.serviceClient
+      .from('social_saved_searches')
+      .insert({
+        user_id: userId,
+        query,
+        scope,
+        filters,
+        last_used_at: nowIso,
+      })
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      throw new BadRequestException(
+        `Failed to create saved search: ${error?.message}`,
+      );
+    }
+
+    return data;
+  }
+
+  async deleteSavedSearch(userId: string, searchId: string) {
+    const { data, error } = await this.serviceClient
+      .from('social_saved_searches')
+      .delete()
+      .eq('id', searchId)
+      .eq('user_id', userId)
+      .select('id')
+      .maybeSingle();
+    if (error) {
+      throw new BadRequestException(
+        `Failed to delete saved search: ${error.message}`,
+      );
+    }
+    if (!data?.id) {
+      throw new NotFoundException('Saved search not found');
+    }
+    return { success: true, id: data.id };
   }
 
   private async getRankedUsers(
@@ -5092,15 +7531,7 @@ export class SocialService {
     if (reel.status !== 'published' && reel.user_id !== viewerUserId)
       throw new NotFoundException('Reel not found');
     const [mapped] = await this.enrichReels([reel], viewerUserId ?? null);
-    const { data: tags } = await this.serviceClient
-      .from('social_content_product_tags')
-      .select('product_id')
-      .eq('content_type', 'reel')
-      .eq('content_id', reelId);
-    return {
-      ...mapped,
-      tagged_product_ids: (tags ?? []).map((tag) => tag.product_id),
-    };
+    return mapped;
   }
 
   async likeContent(
@@ -6119,7 +8550,11 @@ export class SocialService {
     }
 
     const numeric = Number(value);
-    if (!Number.isFinite(numeric) || !Number.isInteger(numeric) || numeric <= 0) {
+    if (
+      !Number.isFinite(numeric) ||
+      !Number.isInteger(numeric) ||
+      numeric <= 0
+    ) {
       throw new BadRequestException(`${fieldName} must be a positive integer`);
     }
 
@@ -6280,8 +8715,8 @@ export class SocialService {
     const sorted = mediaRows
       .filter((row) => String(row?.media_url ?? '').trim().length > 0)
       .sort((a, b) => {
-        const aPrimary = Boolean(a?.is_primary) ? 0 : 1;
-        const bPrimary = Boolean(b?.is_primary) ? 0 : 1;
+        const aPrimary = a?.is_primary ? 0 : 1;
+        const bPrimary = b?.is_primary ? 0 : 1;
         if (aPrimary !== bPrimary) return aPrimary - bPrimary;
 
         const aSortRaw = a?.sort_order ?? a?.display_order;
@@ -6296,8 +8731,12 @@ export class SocialService {
 
         const aCreated = Date.parse(String(a?.created_at ?? ''));
         const bCreated = Date.parse(String(b?.created_at ?? ''));
-        const aTime = Number.isNaN(aCreated) ? Number.MAX_SAFE_INTEGER : aCreated;
-        const bTime = Number.isNaN(bCreated) ? Number.MAX_SAFE_INTEGER : bCreated;
+        const aTime = Number.isNaN(aCreated)
+          ? Number.MAX_SAFE_INTEGER
+          : aCreated;
+        const bTime = Number.isNaN(bCreated)
+          ? Number.MAX_SAFE_INTEGER
+          : bCreated;
         return aTime - bTime;
       });
 
@@ -6320,7 +8759,9 @@ export class SocialService {
       Number.isFinite(quantityRaw) && quantityRaw > 0
         ? Math.floor(quantityRaw)
         : 1;
-    const availableRaw = Number(product.available_quantity ?? product.quantity ?? 0);
+    const availableRaw = Number(
+      product.available_quantity ?? product.quantity ?? 0,
+    );
     const availableQuantity = Number.isFinite(availableRaw)
       ? Math.max(0, Math.floor(availableRaw))
       : 0;
@@ -6333,7 +8774,8 @@ export class SocialService {
       offered_quantity: safeQuantity,
       available_quantity: availableQuantity,
       condition: String(product.condition ?? '').trim() || null,
-      owner_id: String(product.user_id ?? product.seller_id ?? '').trim() || null,
+      owner_id:
+        String(product.user_id ?? product.seller_id ?? '').trim() || null,
     };
   }
 
@@ -6381,7 +8823,10 @@ export class SocialService {
       this.getCategoryMap('sub_subcategories', wantedSubSubcategoryIds),
     ]);
 
-    const products = await this.enrichProducts(productsRaw, viewerUserId ?? null);
+    const products = await this.enrichProducts(
+      productsRaw,
+      viewerUserId ?? null,
+    );
     const productMap = new Map(
       products.map((product) => [product.id as string, product]),
     );
@@ -6447,7 +8892,10 @@ export class SocialService {
       this.getProfilesMap(proposerIds),
       this.fetchProductsByIds(offeredProductIds),
     ]);
-    const products = await this.enrichProducts(productsRaw, viewerUserId ?? null);
+    const products = await this.enrichProducts(
+      productsRaw,
+      viewerUserId ?? null,
+    );
     const productMap = new Map(
       products.map((product) => [product.id as string, product]),
     );
@@ -6473,7 +8921,9 @@ export class SocialService {
 
   private async reconcileSwapTransactionInventory(transactionId: string) {
     const transaction = await this.getSwapTransactionByIdOrThrow(transactionId);
-    const listing = await this.getSwapListingByIdOrThrow(transaction.listing_id);
+    const listing = await this.getSwapListingByIdOrThrow(
+      transaction.listing_id,
+    );
     const proposal = await this.getSwapProposalByIdOrThrow(
       transaction.accepted_proposal_id,
     );
@@ -6580,7 +9030,7 @@ export class SocialService {
               sold_at:
                 nextStatus === 'sold'
                   ? new Date().toISOString()
-                  : product.sold_at ?? null,
+                  : (product.sold_at ?? null),
             })
             .eq('id', product.id);
         }
@@ -6684,20 +9134,24 @@ export class SocialService {
           .in('id', acceptedProposalIds)
       : Promise.resolve({ data: [], error: null } as any);
 
-    const [listingRowsResult, proposalRowsResult, shipmentsResult, disputesResult] =
-      await Promise.all([
-        listingRowsPromise,
-        proposalRowsPromise,
-        this.serviceClient
-          .from('social_swap_shipments')
-          .select('*')
-          .in('transaction_id', transactionIds),
-        this.serviceClient
-          .from('social_swap_disputes')
-          .select('*')
-          .in('transaction_id', transactionIds)
-          .order('created_at', { ascending: false }),
-      ]);
+    const [
+      listingRowsResult,
+      proposalRowsResult,
+      shipmentsResult,
+      disputesResult,
+    ] = await Promise.all([
+      listingRowsPromise,
+      proposalRowsPromise,
+      this.serviceClient
+        .from('social_swap_shipments')
+        .select('*')
+        .in('transaction_id', transactionIds),
+      this.serviceClient
+        .from('social_swap_disputes')
+        .select('*')
+        .in('transaction_id', transactionIds)
+        .order('created_at', { ascending: false }),
+    ]);
 
     if (listingRowsResult.error) {
       throw new BadRequestException(
@@ -6749,11 +9203,12 @@ export class SocialService {
 
     let timelineByTransaction = new Map<string, any[]>();
     if (includeDetails) {
-      const { data: timelineRows, error: timelineError } = await this.serviceClient
-        .from('social_swap_timeline')
-        .select('*')
-        .in('transaction_id', transactionIds)
-        .order('created_at', { ascending: true });
+      const { data: timelineRows, error: timelineError } =
+        await this.serviceClient
+          .from('social_swap_timeline')
+          .select('*')
+          .in('transaction_id', transactionIds)
+          .order('created_at', { ascending: true });
       if (timelineError) {
         throw new BadRequestException(
           `Failed to load swap timeline: ${timelineError.message}`,
@@ -6780,12 +9235,12 @@ export class SocialService {
             : null;
       const myItem =
         myRole === 'owner'
-          ? listing?.social_products ?? null
-          : acceptedProposal?.offered_product ?? null;
+          ? (listing?.social_products ?? null)
+          : (acceptedProposal?.offered_product ?? null);
       const theirItem =
         myRole === 'owner'
-          ? acceptedProposal?.offered_product ?? null
-          : listing?.social_products ?? null;
+          ? (acceptedProposal?.offered_product ?? null)
+          : (listing?.social_products ?? null);
       const counterpartId =
         myRole === 'owner' ? transaction.proposer_id : transaction.owner_id;
       const counterpartProfile = listing
@@ -6824,27 +9279,378 @@ export class SocialService {
     });
   }
 
-  async getExchangeListings(viewerUserId: string | null = null) {
-    const { data: listings, error } = await this.serviceClient
-      .from('social_swap_listings')
-      .select('*')
-      .eq('status', 'open')
-      .order('created_at', { ascending: false });
+  private exchangeText(value: unknown): string {
+    return String(value ?? '').trim();
+  }
+
+  private exchangeLower(value: unknown): string {
+    return this.exchangeText(value).toLowerCase();
+  }
+
+  private exchangeNumber(value: unknown): number | null {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private parseExchangeQueryList(value?: string): string[] {
+    const raw = this.exchangeText(value);
+    if (!raw) return [];
+    return Array.from(
+      new Set(
+        raw
+          .split(',')
+          .map((entry) => this.exchangeText(entry))
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  private normalizeExchangeStatuses(status?: string): string[] {
+    return this.parseExchangeQueryList(status)
+      .map((entry) => this.exchangeLower(entry))
+      .filter((entry) => Boolean(entry) && entry !== 'all');
+  }
+
+  private normalizeExchangeSort(
+    sort?: string,
+  ):
+    | 'recommended'
+    | 'newest'
+    | 'most_proposals'
+    | 'most_viewed'
+    | 'value_low'
+    | 'value_high' {
+    const normalized = this.exchangeLower(sort);
+    if (
+      normalized === 'newest' ||
+      normalized === 'most_proposals' ||
+      normalized === 'most_viewed' ||
+      normalized === 'value_low' ||
+      normalized === 'value_high'
+    ) {
+      return normalized;
+    }
+    return 'recommended';
+  }
+
+  private formatExchangeMoney(value: number): string {
+    return `$${Math.round(value).toLocaleString('en-US')}`;
+  }
+
+  private exchangeListingGiveCategory(listing: any): string {
+    return this.exchangeText(listing?.social_products?.category) || 'Other';
+  }
+
+  private exchangeListingWantCategory(listing: any): string {
+    return this.exchangeText(listing?.wanted_category) || 'Any';
+  }
+
+  private exchangeListingValueBucket(listing: any): string {
+    const min = this.exchangeNumber(listing?.wanted_min_value);
+    const max = this.exchangeNumber(listing?.wanted_max_value);
+    if (min !== null && max !== null) {
+      return `${this.formatExchangeMoney(min)}-${this.formatExchangeMoney(max)}`;
+    }
+    if (min !== null) {
+      return `${this.formatExchangeMoney(min)}+`;
+    }
+    if (max !== null) {
+      return `Up to ${this.formatExchangeMoney(max)}`;
+    }
+    return 'Any value';
+  }
+
+  private exchangeListingType(listing: any): string {
+    const quantityRaw = this.exchangeNumber(listing?.offered_quantity);
+    const quantity =
+      quantityRaw !== null ? Math.max(1, Math.floor(quantityRaw)) : 1;
+    if (quantity > 1) return 'Bundle swap';
+    if (listing?.is_cash_top_up_allowed) return 'Swap + cash';
+    return 'Direct swap';
+  }
+
+  private exchangeListingCondition(listing: any): string {
+    return (
+      this.exchangeText(listing?.offered_product_preview?.condition) ||
+      this.exchangeText(listing?.social_products?.condition) ||
+      'Any'
+    );
+  }
+
+  private exchangeListingSellerKey(listing: any): string {
+    return (
+      this.exchangeText(listing?.owner_id) ||
+      this.exchangeText(listing?.owner_username) ||
+      this.exchangeText(listing?.id)
+    );
+  }
+
+  private exchangeListingSellerLabel(listing: any): string {
+    const displayName = this.exchangeText(listing?.owner_display_name);
+    const username = this.exchangeText(listing?.owner_username);
+    if (displayName && username) {
+      return `${displayName} (@${username})`;
+    }
+    if (displayName) return displayName;
+    if (username) return `@${username}`;
+    return 'Unknown seller';
+  }
+
+  private exchangeListingPriceEstimate(listing: any): number | null {
+    const offeredValue = this.exchangeNumber(listing?.offered_value);
+    if (offeredValue !== null) return offeredValue;
+    const previewPrice = this.exchangeNumber(
+      listing?.offered_product_preview?.price,
+    );
+    if (previewPrice !== null) return previewPrice;
+    return this.exchangeNumber(listing?.social_products?.price);
+  }
+
+  private exchangeListingCreatedAt(listing: any): number {
+    const parsed = Date.parse(String(listing?.created_at ?? ''));
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
+  private exchangeListingSearchHaystack(listing: any): string {
+    return [
+      listing?.title,
+      listing?.description,
+      listing?.wanted_description,
+      listing?.wanted_category,
+      listing?.wanted_subcategory,
+      listing?.owner_username,
+      listing?.owner_display_name,
+      listing?.offered_product_preview?.title,
+      listing?.social_products?.title,
+      listing?.social_products?.brand,
+    ]
+      .map((entry) => this.exchangeLower(entry))
+      .join(' ');
+  }
+
+  private applyExchangeFilters(
+    listings: any[],
+    options?: ExchangeListingsQueryOptions,
+  ): any[] {
+    const q = this.exchangeLower(options?.q);
+    const statusValues = new Set(
+      this.normalizeExchangeStatuses(options?.status),
+    );
+    const giveValues = new Set(
+      this.parseExchangeQueryList(options?.give).map((entry) =>
+        this.exchangeLower(entry),
+      ),
+    );
+    const wantValues = new Set(
+      this.parseExchangeQueryList(options?.want).map((entry) =>
+        this.exchangeLower(entry),
+      ),
+    );
+    const valueValues = new Set(
+      this.parseExchangeQueryList(options?.value).map((entry) =>
+        this.exchangeLower(entry),
+      ),
+    );
+    const typeValues = new Set(
+      this.parseExchangeQueryList(options?.type).map((entry) =>
+        this.exchangeLower(entry),
+      ),
+    );
+    const conditionValues = new Set(
+      this.parseExchangeQueryList(options?.condition).map((entry) =>
+        this.exchangeLower(entry),
+      ),
+    );
+    const sellerValues = new Set(
+      this.parseExchangeQueryList(options?.seller).map((entry) =>
+        this.exchangeLower(entry),
+      ),
+    );
+
+    return listings.filter((listing) => {
+      if (q && !this.exchangeListingSearchHaystack(listing).includes(q)) {
+        return false;
+      }
+
+      if (statusValues.size) {
+        const listingStatus = this.exchangeLower(listing?.status || 'open');
+        if (!statusValues.has(listingStatus)) return false;
+      }
+
+      const give = this.exchangeLower(
+        this.exchangeListingGiveCategory(listing),
+      );
+      if (giveValues.size && !giveValues.has(give)) return false;
+
+      const want = this.exchangeLower(
+        this.exchangeListingWantCategory(listing),
+      );
+      if (wantValues.size && !wantValues.has(want)) return false;
+
+      const value = this.exchangeLower(
+        this.exchangeListingValueBucket(listing),
+      );
+      if (valueValues.size && !valueValues.has(value)) return false;
+
+      const type = this.exchangeLower(this.exchangeListingType(listing));
+      if (typeValues.size && !typeValues.has(type)) return false;
+
+      const condition = this.exchangeLower(
+        this.exchangeListingCondition(listing),
+      );
+      if (conditionValues.size && !conditionValues.has(condition)) return false;
+
+      if (sellerValues.size) {
+        const sellerKey = this.exchangeLower(
+          this.exchangeListingSellerKey(listing),
+        );
+        const sellerLabel = this.exchangeLower(
+          this.exchangeListingSellerLabel(listing),
+        );
+        if (!sellerValues.has(sellerKey) && !sellerValues.has(sellerLabel)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }
+
+  private applyExchangeSort(
+    listings: any[],
+    sort:
+      | 'recommended'
+      | 'newest'
+      | 'most_proposals'
+      | 'most_viewed'
+      | 'value_low'
+      | 'value_high',
+  ): any[] {
+    const sorted = [...listings];
+    switch (sort) {
+      case 'most_proposals':
+        sorted.sort(
+          (a, b) =>
+            Number(b?.proposal_count ?? 0) - Number(a?.proposal_count ?? 0),
+        );
+        return sorted;
+      case 'most_viewed':
+        sorted.sort(
+          (a, b) => Number(b?.views_count ?? 0) - Number(a?.views_count ?? 0),
+        );
+        return sorted;
+      case 'value_low':
+        sorted.sort((a, b) => {
+          const aValue =
+            this.exchangeListingPriceEstimate(a) ?? Number.MAX_SAFE_INTEGER;
+          const bValue =
+            this.exchangeListingPriceEstimate(b) ?? Number.MAX_SAFE_INTEGER;
+          return aValue - bValue;
+        });
+        return sorted;
+      case 'value_high':
+        sorted.sort((a, b) => {
+          const aValue = this.exchangeListingPriceEstimate(a) ?? 0;
+          const bValue = this.exchangeListingPriceEstimate(b) ?? 0;
+          return bValue - aValue;
+        });
+        return sorted;
+      case 'recommended':
+      case 'newest':
+      default:
+        sorted.sort(
+          (a, b) =>
+            this.exchangeListingCreatedAt(b) - this.exchangeListingCreatedAt(a),
+        );
+        return sorted;
+    }
+  }
+
+  private applyExchangeLimit(listings: any[], limit?: number): any[] {
+    const parsedLimit = Number(limit);
+    if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+      return listings;
+    }
+    const safeLimit = Math.min(200, Math.floor(parsedLimit));
+    return listings.slice(0, safeLimit);
+  }
+
+  async getExchangeListings(
+    viewerUserId: string | null = null,
+    options?: ExchangeListingsQueryOptions,
+  ) {
+    const statusFilters = this.normalizeExchangeStatuses(options?.status);
+    let query = this.serviceClient.from('social_swap_listings').select('*');
+    if (statusFilters.length) {
+      query = query.in('status', statusFilters);
+    } else {
+      query = query.eq('status', 'open');
+    }
+
+    const { data: listings, error } = await query.order('created_at', {
+      ascending: false,
+    });
     if (error) {
       throw new BadRequestException(
         `Failed to fetch exchange listings: ${error.message}`,
       );
     }
-    const openListings = (listings ?? []).filter((listing) => {
-      if (!listing.expires_at) return true;
-      const expiresAt = new Date(String(listing.expires_at));
-      if (Number.isNaN(expiresAt.getTime())) return true;
-      return expiresAt.getTime() > Date.now();
+
+    const now = Date.now();
+    const listingsWithinWindow = (listings ?? []).filter((listing) => {
+      const status = this.exchangeLower(listing?.status || 'open');
+      if (status !== 'open') return true;
+      const expiresAtRaw = this.exchangeText(listing?.expires_at);
+      if (!expiresAtRaw) return true;
+      const expiresAtMs = Date.parse(expiresAtRaw);
+      if (Number.isNaN(expiresAtMs)) return true;
+      return expiresAtMs > now;
     });
-    return this.hydrateSwapListings(openListings, viewerUserId);
+
+    const hydrated = await this.hydrateSwapListings(
+      listingsWithinWindow,
+      viewerUserId,
+    );
+    const filtered = this.applyExchangeFilters(hydrated, options);
+    const sortMode = this.normalizeExchangeSort(options?.sort);
+    const sorted = this.applyExchangeSort(filtered, sortMode);
+    return this.applyExchangeLimit(sorted, options?.limit);
   }
 
-  async getExchangeListingById(listingId: string, viewerUserId?: string | null) {
+  async getCachedExchangeListings(
+    viewerUserId: string | null = null,
+    locale?: string,
+    options?: ExchangeListingsQueryOptions,
+  ) {
+    const safeLocale = this.normalizeLocale(locale);
+    const key = this.readCacheKey('social:exchange-listings', {
+      viewerUserId: viewerUserId ?? null,
+      locale: safeLocale,
+      q: this.exchangeText(options?.q),
+      status: this.exchangeText(options?.status),
+      sort: this.exchangeText(options?.sort),
+      give: this.exchangeText(options?.give),
+      want: this.exchangeText(options?.want),
+      value: this.exchangeText(options?.value),
+      type: this.exchangeText(options?.type),
+      condition: this.exchangeText(options?.condition),
+      seller: this.exchangeText(options?.seller),
+      limit: Number(options?.limit ?? 0) || 0,
+    });
+    return this.getOrSetReadCache(key, async () => {
+      try {
+        const data = await this.getExchangeListings(viewerUserId, options);
+        return data;
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  async getExchangeListingById(
+    listingId: string,
+    viewerUserId?: string | null,
+  ) {
     const listing = await this.getSwapListingByIdOrThrow(listingId);
     const isOwner = Boolean(viewerUserId) && listing.owner_id === viewerUserId;
 
@@ -6909,13 +9715,14 @@ export class SocialService {
       viewerUserId ?? null,
     );
 
-    const { data: transaction, error: transactionError } = await this.serviceClient
-      .from('social_swap_transactions')
-      .select('*')
-      .eq('listing_id', listingId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const { data: transaction, error: transactionError } =
+      await this.serviceClient
+        .from('social_swap_transactions')
+        .select('*')
+        .eq('listing_id', listingId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
     if (transactionError) {
       throw new BadRequestException(
         `Failed to load swap transaction: ${transactionError.message}`,
@@ -6957,7 +9764,8 @@ export class SocialService {
     const title = String(payload?.title ?? '').trim();
     if (!title) throw new BadRequestException('title is required');
 
-    const offeredProductId = String(payload?.offeredProductId ?? '').trim() || null;
+    const offeredProductId =
+      String(payload?.offeredProductId ?? '').trim() || null;
     if (!offeredProductId) {
       throw new BadRequestException('offeredProductId is required');
     }
@@ -7011,7 +9819,8 @@ export class SocialService {
         wanted_category_id: payload.wantedCategoryId ?? null,
         wanted_subcategory_id: payload.wantedSubcategoryId ?? null,
         wanted_sub_subcategory_id: payload.wantedSubSubcategoryId ?? null,
-        wanted_description: String(payload?.wantedDescription ?? '').trim() || null,
+        wanted_description:
+          String(payload?.wantedDescription ?? '').trim() || null,
         wanted_min_value: wantedMinValue,
         wanted_max_value: wantedMaxValue,
         offered_value: offeredValue,
@@ -7037,7 +9846,9 @@ export class SocialService {
   async updateSwapListing(userId: string, listingId: string, payload: any) {
     const listing = await this.getSwapListingByIdOrThrow(listingId);
     if (listing.owner_id !== userId) {
-      throw new ForbiddenException('Only listing owner can update this listing');
+      throw new ForbiddenException(
+        'Only listing owner can update this listing',
+      );
     }
 
     const action = String(payload?.action ?? '')
@@ -7181,12 +9992,13 @@ export class SocialService {
       return this.getExchangeListingById(listing.id, userId);
     }
 
-    const { data: updatedListing, error: updateError } = await this.serviceClient
-      .from('social_swap_listings')
-      .update(updateData)
-      .eq('id', listing.id)
-      .select('*')
-      .single();
+    const { data: updatedListing, error: updateError } =
+      await this.serviceClient
+        .from('social_swap_listings')
+        .update(updateData)
+        .eq('id', listing.id)
+        .select('*')
+        .single();
     if (updateError || !updatedListing) {
       if (this.isSwapOfferedQuantityColumnMissing(updateError)) {
         throw new BadRequestException(
@@ -7209,7 +10021,10 @@ export class SocialService {
     if (listing.status !== 'open') {
       throw new BadRequestException('Listing is not open for proposals');
     }
-    if (listing.expires_at && new Date(listing.expires_at).getTime() <= Date.now()) {
+    if (
+      listing.expires_at &&
+      new Date(listing.expires_at).getTime() <= Date.now()
+    ) {
       throw new BadRequestException('Listing is expired');
     }
 
@@ -7291,7 +10106,10 @@ export class SocialService {
       { listingId, proposalId: proposal.id },
     );
 
-    const [mappedProposal] = await this.hydrateSwapProposals([proposal], userId);
+    const [mappedProposal] = await this.hydrateSwapProposals(
+      [proposal],
+      userId,
+    );
     return mappedProposal ?? proposal;
   }
 
@@ -7308,14 +10126,12 @@ export class SocialService {
       throw new BadRequestException('Proposal is not pending');
     }
 
-    const { data: acceptedRows, error: acceptError } = await this.serviceClient.rpc(
-      'social_accept_swap_proposal_atomic',
-      {
+    const { data: acceptedRows, error: acceptError } =
+      await this.serviceClient.rpc('social_accept_swap_proposal_atomic', {
         p_listing_id: listing.id,
         p_proposal_id: proposal.id,
         p_actor_id: userId,
-      },
-    );
+      });
     if (acceptError) {
       throw new BadRequestException(
         `Failed to accept swap proposal: ${acceptError.message}`,
@@ -7517,12 +10333,18 @@ export class SocialService {
   async getSwapTransactionById(userId: string, transactionId: string) {
     const transaction = await this.getSwapTransactionByIdOrThrow(transactionId);
     if (transaction.owner_id !== userId && transaction.proposer_id !== userId) {
-      throw new ForbiddenException('You do not have access to this transaction');
+      throw new ForbiddenException(
+        'You do not have access to this transaction',
+      );
     }
 
     await this.syncSwapTransactionState(transaction.id, userId);
     const refreshed = await this.getSwapTransactionByIdOrThrow(transaction.id);
-    const [mapped] = await this.hydrateSwapTransactions([refreshed], userId, true);
+    const [mapped] = await this.hydrateSwapTransactions(
+      [refreshed],
+      userId,
+      true,
+    );
     return mapped ?? null;
   }
 
@@ -7537,7 +10359,10 @@ export class SocialService {
     await this.runSwapTransactionAction(transactionId, userId, 'set_address', {
       address_id: addressId,
     });
-    const transaction = await this.getSwapTransactionById(userId, transactionId);
+    const transaction = await this.getSwapTransactionById(
+      userId,
+      transactionId,
+    );
     const counterpartId =
       transaction?.owner_id === userId
         ? transaction?.proposer_id
@@ -7563,7 +10388,10 @@ export class SocialService {
       carrier: String(payload?.carrier ?? '').trim() || null,
       tracking_number: String(payload?.trackingNumber ?? '').trim() || null,
     });
-    const transaction = await this.getSwapTransactionById(userId, transactionId);
+    const transaction = await this.getSwapTransactionById(
+      userId,
+      transactionId,
+    );
     const counterpartId =
       transaction?.owner_id === userId
         ? transaction?.proposer_id
@@ -7593,7 +10421,10 @@ export class SocialService {
         notes: String(payload?.notes ?? '').trim() || null,
       },
     );
-    const transaction = await this.getSwapTransactionById(userId, transactionId);
+    const transaction = await this.getSwapTransactionById(
+      userId,
+      transactionId,
+    );
     const counterpartId =
       transaction?.owner_id === userId
         ? transaction?.proposer_id
@@ -7629,7 +10460,10 @@ export class SocialService {
       reason,
       details: String(payload?.details ?? '').trim() || null,
     });
-    const transaction = await this.getSwapTransactionById(userId, transactionId);
+    const transaction = await this.getSwapTransactionById(
+      userId,
+      transactionId,
+    );
     const counterpartId =
       transaction?.owner_id === userId
         ? transaction?.proposer_id
@@ -7644,6 +10478,565 @@ export class SocialService {
       );
     }
     return transaction;
+  }
+
+  private normalizeSwapDisputePriority(
+    value: unknown,
+  ): 'low' | 'normal' | 'high' | 'urgent' {
+    const normalized = String(value ?? '')
+      .trim()
+      .toLowerCase();
+    if (
+      normalized === 'low' ||
+      normalized === 'normal' ||
+      normalized === 'high' ||
+      normalized === 'urgent'
+    ) {
+      return normalized;
+    }
+    return 'normal';
+  }
+
+  private computeSwapDisputeSlaDueAt(
+    priority: 'low' | 'normal' | 'high' | 'urgent',
+  ) {
+    const hoursByPriority: Record<typeof priority, number> = {
+      low: 96,
+      normal: 72,
+      high: 48,
+      urgent: 24,
+    };
+    return new Date(
+      Date.now() + hoursByPriority[priority] * 60 * 60 * 1000,
+    ).toISOString();
+  }
+
+  private async getSwapDisputeByIdOrThrow(disputeId: string) {
+    const { data, error } = await this.serviceClient
+      .from('social_swap_disputes')
+      .select('*')
+      .eq('id', disputeId)
+      .maybeSingle();
+    if (error) {
+      throw new BadRequestException(
+        `Failed to fetch swap dispute: ${error.message}`,
+      );
+    }
+    if (!data) {
+      throw new NotFoundException('Swap dispute not found');
+    }
+    return data;
+  }
+
+  private async resolveSwapDisputeAccess(userId: string, disputeId: string) {
+    const dispute = await this.getSwapDisputeByIdOrThrow(disputeId);
+    const transaction = await this.getSwapTransactionByIdOrThrow(
+      dispute.transaction_id,
+    );
+    const isParticipant =
+      transaction.owner_id === userId || transaction.proposer_id === userId;
+    const isSupport = this.isSupportUser(userId);
+    if (!isParticipant && !isSupport) {
+      throw new ForbiddenException('You do not have access to this dispute');
+    }
+    const viewerRole = isSupport
+      ? 'support'
+      : transaction.owner_id === userId
+        ? 'owner'
+        : 'proposer';
+
+    return {
+      dispute,
+      transaction,
+      isParticipant,
+      isSupport,
+      viewerRole,
+    };
+  }
+
+  async listSwapDisputes(userId: string, options?: SwapDisputeListOptions) {
+    const limit = this.sanitizeLimit(options?.limit, 20, 50);
+    const cursor = String(options?.cursor ?? '').trim() || null;
+    const status = String(options?.status ?? '')
+      .trim()
+      .toLowerCase();
+    const queueView = Boolean(options?.queue);
+    const isSupport = this.isSupportUser(userId);
+
+    let transactionIds: string[] | null = null;
+    if (!isSupport || !queueView) {
+      const { data: ownTransactions, error: ownTransactionsError } =
+        await this.serviceClient
+          .from('social_swap_transactions')
+          .select('id')
+          .or(`owner_id.eq.${userId},proposer_id.eq.${userId}`);
+      if (ownTransactionsError) {
+        throw new BadRequestException(
+          `Failed to load swap transactions for disputes: ${ownTransactionsError.message}`,
+        );
+      }
+      transactionIds = (ownTransactions ?? [])
+        .map((row) => row.id)
+        .filter((value): value is string => Boolean(value));
+      if (!transactionIds.length) {
+        return { items: [], nextCursor: null };
+      }
+    }
+
+    let query = this.serviceClient
+      .from('social_swap_disputes')
+      .select('*')
+      .order('updated_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(limit + 1);
+
+    if (transactionIds) {
+      query = query.in('transaction_id', transactionIds);
+    }
+    if (status) {
+      query = query.eq('status', status);
+    }
+    if (cursor) {
+      query = query.lt('updated_at', cursor);
+    }
+
+    const { data: disputeRows, error: disputesError } = await query;
+    if (disputesError) {
+      throw new BadRequestException(
+        `Failed to load disputes: ${disputesError.message}`,
+      );
+    }
+
+    const hasMore = (disputeRows ?? []).length > limit;
+    const pageRows = hasMore
+      ? (disputeRows ?? []).slice(0, limit)
+      : (disputeRows ?? []);
+    const txIds = Array.from(
+      new Set(
+        pageRows
+          .map((row) => row.transaction_id)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+
+    const transactionsResult = txIds.length
+      ? await this.serviceClient
+          .from('social_swap_transactions')
+          .select('*')
+          .in('id', txIds)
+      : ({ data: [], error: null } as any);
+    if (transactionsResult.error) {
+      throw new BadRequestException(
+        `Failed to load dispute transactions: ${transactionsResult.error.message}`,
+      );
+    }
+
+    const listingIds = Array.from(
+      new Set(
+        (transactionsResult.data ?? [])
+          .map((row) => row.listing_id)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+    const listingsResult = listingIds.length
+      ? await this.serviceClient
+          .from('social_swap_listings')
+          .select('*')
+          .in('id', listingIds)
+      : ({ data: [], error: null } as any);
+    if (listingsResult.error) {
+      throw new BadRequestException(
+        `Failed to load dispute listings: ${listingsResult.error.message}`,
+      );
+    }
+
+    const txMap = new Map<string, any>(
+      (transactionsResult.data ?? []).map((row: any) => [row.id, row]),
+    );
+    const listingMap = new Map<string, any>(
+      (listingsResult.data ?? []).map((row: any) => [row.id, row]),
+    );
+
+    const items = pageRows.map((row) => {
+      const transaction = txMap.get(row.transaction_id) ?? null;
+      const listing = transaction
+        ? (listingMap.get(transaction.listing_id) ?? null)
+        : null;
+      return {
+        ...row,
+        transaction,
+        listing,
+        viewer_role: isSupport
+          ? 'support'
+          : transaction?.owner_id === userId
+            ? 'owner'
+            : 'proposer',
+        queue_state: {
+          priority: row.priority ?? 'normal',
+          sla_due_at: row.sla_due_at ?? null,
+          is_overdue:
+            Boolean(row.sla_due_at) &&
+            new Date(String(row.sla_due_at)).getTime() < Date.now(),
+        },
+      };
+    });
+
+    const last = pageRows[pageRows.length - 1];
+    return {
+      items,
+      nextCursor: hasMore && last ? String(last.updated_at ?? '') : null,
+    };
+  }
+
+  async getSwapDisputeDetail(userId: string, disputeId: string) {
+    const access = await this.resolveSwapDisputeAccess(userId, disputeId);
+    const { dispute, transaction, isSupport, viewerRole } = access;
+
+    let messagesQuery = this.serviceClient
+      .from('social_swap_dispute_messages')
+      .select('*')
+      .eq('dispute_id', dispute.id)
+      .order('created_at', { ascending: true });
+    if (!isSupport) {
+      messagesQuery = messagesQuery.eq('is_internal', false);
+    }
+
+    let evidenceQuery = this.serviceClient
+      .from('social_swap_dispute_evidence')
+      .select('*')
+      .eq('dispute_id', dispute.id)
+      .order('created_at', { ascending: true });
+    if (!isSupport) {
+      evidenceQuery = evidenceQuery.eq('is_internal', false);
+    }
+
+    const [messagesResult, evidenceResult, timelineResult] = await Promise.all([
+      messagesQuery,
+      evidenceQuery,
+      this.serviceClient
+        .from('social_swap_timeline')
+        .select('*')
+        .eq('transaction_id', dispute.transaction_id)
+        .order('created_at', { ascending: true }),
+    ]);
+
+    if (messagesResult.error) {
+      throw new BadRequestException(
+        `Failed to load dispute messages: ${messagesResult.error.message}`,
+      );
+    }
+    if (evidenceResult.error) {
+      throw new BadRequestException(
+        `Failed to load dispute evidence: ${evidenceResult.error.message}`,
+      );
+    }
+    if (timelineResult.error) {
+      throw new BadRequestException(
+        `Failed to load dispute timeline: ${timelineResult.error.message}`,
+      );
+    }
+
+    const listing = await this.getSwapListingByIdOrThrow(
+      transaction.listing_id,
+    );
+
+    return {
+      dispute,
+      transaction,
+      listing,
+      messages: messagesResult.data ?? [],
+      evidence: evidenceResult.data ?? [],
+      timeline: timelineResult.data ?? [],
+      viewerRole,
+      isSupportView: isSupport,
+    };
+  }
+
+  async createSwapDisputeMessage(
+    userId: string,
+    disputeId: string,
+    payload: SwapDisputeMessagePayload,
+  ) {
+    const access = await this.resolveSwapDisputeAccess(userId, disputeId);
+    const body = String(payload?.body ?? '').trim();
+    if (!body) {
+      throw new BadRequestException('body is required');
+    }
+    const isInternal = Boolean(payload?.isInternal);
+    if (isInternal && !access.isSupport) {
+      throw new ForbiddenException(
+        'Only support can create internal dispute messages',
+      );
+    }
+
+    const nowIso = new Date().toISOString();
+    const { data: message, error } = await this.serviceClient
+      .from('social_swap_dispute_messages')
+      .insert({
+        dispute_id: access.dispute.id,
+        transaction_id: access.transaction.id,
+        sender_id: userId,
+        body,
+        message_type: 'comment',
+        is_internal: isInternal,
+      })
+      .select('*')
+      .single();
+    if (error || !message) {
+      throw new BadRequestException(
+        `Failed to create dispute message: ${error?.message}`,
+      );
+    }
+
+    await this.serviceClient
+      .from('social_swap_disputes')
+      .update({
+        last_activity_at: nowIso,
+      })
+      .eq('id', access.dispute.id);
+
+    await this.serviceClient.from('social_swap_timeline').insert({
+      transaction_id: access.transaction.id,
+      event_type: 'swap_dispute_message',
+      actor_id: userId,
+      payload: {
+        dispute_id: access.dispute.id,
+        message_id: message.id,
+        is_internal: isInternal,
+      },
+    });
+
+    const counterpartId =
+      access.transaction.owner_id === userId
+        ? access.transaction.proposer_id
+        : access.transaction.owner_id;
+    if (!isInternal && counterpartId) {
+      await this.createSwapNotification(
+        counterpartId,
+        'swap_dispute_message',
+        'Dispute updated',
+        'A new message was added to your dispute.',
+        {
+          transactionId: access.transaction.id,
+          disputeId: access.dispute.id,
+          messageId: message.id,
+        },
+      );
+    }
+
+    return this.getSwapDisputeDetail(userId, disputeId);
+  }
+
+  async createSwapDisputeEvidence(
+    userId: string,
+    disputeId: string,
+    payload: SwapDisputeEvidencePayload,
+  ) {
+    const access = await this.resolveSwapDisputeAccess(userId, disputeId);
+    const fileUrl = String(payload?.fileUrl ?? '').trim();
+    if (!fileUrl) {
+      throw new BadRequestException('fileUrl is required');
+    }
+    const isInternal = Boolean(payload?.isInternal);
+    if (isInternal && !access.isSupport) {
+      throw new ForbiddenException(
+        'Only support can create internal dispute evidence',
+      );
+    }
+
+    const nowIso = new Date().toISOString();
+    const { data: evidence, error } = await this.serviceClient
+      .from('social_swap_dispute_evidence')
+      .insert({
+        dispute_id: access.dispute.id,
+        transaction_id: access.transaction.id,
+        uploaded_by: userId,
+        file_url: fileUrl,
+        file_type: String(payload?.fileType ?? '').trim() || null,
+        note: String(payload?.note ?? '').trim() || null,
+        is_internal: isInternal,
+      })
+      .select('*')
+      .single();
+    if (error || !evidence) {
+      throw new BadRequestException(
+        `Failed to create dispute evidence: ${error?.message}`,
+      );
+    }
+
+    await this.serviceClient
+      .from('social_swap_disputes')
+      .update({
+        last_activity_at: nowIso,
+      })
+      .eq('id', access.dispute.id);
+
+    await this.serviceClient.from('social_swap_timeline').insert({
+      transaction_id: access.transaction.id,
+      event_type: 'swap_dispute_evidence_added',
+      actor_id: userId,
+      payload: {
+        dispute_id: access.dispute.id,
+        evidence_id: evidence.id,
+        is_internal: isInternal,
+      },
+    });
+
+    const counterpartId =
+      access.transaction.owner_id === userId
+        ? access.transaction.proposer_id
+        : access.transaction.owner_id;
+    if (!isInternal && counterpartId) {
+      await this.createSwapNotification(
+        counterpartId,
+        'swap_dispute_evidence_added',
+        'Dispute evidence added',
+        'New evidence was added to your dispute.',
+        {
+          transactionId: access.transaction.id,
+          disputeId: access.dispute.id,
+          evidenceId: evidence.id,
+        },
+      );
+    }
+
+    return this.getSwapDisputeDetail(userId, disputeId);
+  }
+
+  async updateSwapDispute(
+    userId: string,
+    disputeId: string,
+    payload: SwapDisputeActionPayload,
+  ) {
+    const access = await this.resolveSwapDisputeAccess(userId, disputeId);
+    const action = String(payload?.action ?? '')
+      .trim()
+      .toLowerCase();
+    if (!action) {
+      throw new BadRequestException('action is required');
+    }
+    if (action !== 'resolve' && action !== 'escalate' && action !== 'reopen') {
+      throw new BadRequestException('Unsupported dispute action');
+    }
+
+    if ((action === 'resolve' || action === 'escalate') && !access.isSupport) {
+      throw new ForbiddenException(
+        'Only support users can resolve or escalate disputes',
+      );
+    }
+
+    const nowIso = new Date().toISOString();
+    const nextPriority =
+      payload?.priority !== undefined
+        ? this.normalizeSwapDisputePriority(payload.priority)
+        : this.normalizeSwapDisputePriority(access.dispute.priority);
+
+    const updateData: Record<string, unknown> = {
+      priority: nextPriority,
+      sla_due_at: this.computeSwapDisputeSlaDueAt(nextPriority),
+      last_activity_at: nowIso,
+    };
+    if (payload?.resolutionNotes !== undefined) {
+      updateData.resolution_notes =
+        String(payload.resolutionNotes ?? '').trim() || null;
+    }
+
+    if (action === 'resolve') {
+      updateData.status = 'resolved';
+      updateData.resolved_by = userId;
+      updateData.resolved_at = nowIso;
+      if (!updateData.resolution_notes) {
+        updateData.resolution_notes = 'Resolved by support';
+      }
+    } else if (action === 'escalate') {
+      updateData.status = 'escalated';
+      updateData.escalated_at = nowIso;
+    } else {
+      updateData.status = 'open';
+      updateData.resolved_by = null;
+      updateData.resolved_at = null;
+    }
+
+    const { error: updateError } = await this.serviceClient
+      .from('social_swap_disputes')
+      .update(updateData)
+      .eq('id', access.dispute.id);
+    if (updateError) {
+      throw new BadRequestException(
+        `Failed to update dispute: ${updateError.message}`,
+      );
+    }
+
+    if (action === 'resolve') {
+      await this.serviceClient
+        .from('social_swap_transactions')
+        .update({
+          status: 'inspection',
+          updated_at: nowIso,
+        })
+        .eq('id', access.transaction.id)
+        .eq('status', 'disputed');
+    }
+    if (action === 'reopen') {
+      await this.serviceClient
+        .from('social_swap_transactions')
+        .update({
+          status: 'disputed',
+          updated_at: nowIso,
+        })
+        .eq('id', access.transaction.id);
+    }
+
+    await this.serviceClient.from('social_swap_timeline').insert({
+      transaction_id: access.transaction.id,
+      event_type:
+        action === 'resolve'
+          ? 'swap_dispute_resolved'
+          : action === 'escalate'
+            ? 'swap_dispute_escalated'
+            : 'swap_dispute_reopened',
+      actor_id: userId,
+      payload: {
+        dispute_id: access.dispute.id,
+        priority: nextPriority,
+      },
+    });
+
+    const participantIds = Array.from(
+      new Set([
+        access.transaction.owner_id,
+        access.transaction.proposer_id,
+      ]).values(),
+    ).filter((value): value is string => Boolean(value) && value !== userId);
+    await Promise.all(
+      participantIds.map((participantId) =>
+        this.createSwapNotification(
+          participantId,
+          action === 'resolve'
+            ? 'swap_dispute_resolved'
+            : action === 'escalate'
+              ? 'swap_dispute_escalated'
+              : 'swap_dispute_reopened',
+          action === 'resolve'
+            ? 'Dispute resolved'
+            : action === 'escalate'
+              ? 'Dispute escalated'
+              : 'Dispute reopened',
+          action === 'resolve'
+            ? 'Your dispute has been resolved.'
+            : action === 'escalate'
+              ? 'Your dispute has been escalated for review.'
+              : 'Your dispute was reopened.',
+          {
+            disputeId: access.dispute.id,
+            transactionId: access.transaction.id,
+            action,
+          },
+        ),
+      ),
+    );
+
+    return this.getSwapDisputeDetail(userId, disputeId);
   }
 
   async getSwapAddresses(userId: string) {
@@ -7678,14 +11071,16 @@ export class SocialService {
     const country = String(payload?.country ?? '').trim() || 'United States';
 
     if (!fullName) throw new BadRequestException('fullName is required');
-    if (!addressLine1) throw new BadRequestException('addressLine1 is required');
+    if (!addressLine1)
+      throw new BadRequestException('addressLine1 is required');
     if (!city) throw new BadRequestException('city is required');
 
-    const { data: existingAddresses, error: existingError } = await this.serviceClient
-      .from('social_swap_addresses')
-      .select('id, is_default')
-      .eq('user_id', userId)
-      .eq('is_active', true);
+    const { data: existingAddresses, error: existingError } =
+      await this.serviceClient
+        .from('social_swap_addresses')
+        .select('id, is_default')
+        .eq('user_id', userId)
+        .eq('is_active', true);
     if (existingError) {
       throw new BadRequestException(
         `Failed to validate existing addresses: ${existingError.message}`,
@@ -7761,7 +11156,8 @@ export class SocialService {
       updateData.address_line1 = addressLine1;
     }
     if (payload?.addressLine2 !== undefined)
-      updateData.address_line2 = String(payload.addressLine2 ?? '').trim() || null;
+      updateData.address_line2 =
+        String(payload.addressLine2 ?? '').trim() || null;
     if (payload?.city !== undefined) {
       const city = String(payload.city ?? '').trim();
       if (!city) throw new BadRequestException('city cannot be empty');
@@ -7954,13 +11350,17 @@ export class SocialService {
       );
     }
 
-    const [mappedListings, mappedProposals, mappedProposalListings, mappedTransactions] =
-      await Promise.all([
-        this.hydrateSwapListings(myListingsResult.data ?? [], userId),
-        this.hydrateSwapProposals(managerProposals, userId),
-        this.hydrateSwapListings(proposalListingsResult.data ?? [], userId),
-        this.hydrateSwapTransactions(refreshedTransactions, userId, false),
-      ]);
+    const [
+      mappedListings,
+      mappedProposals,
+      mappedProposalListings,
+      mappedTransactions,
+    ] = await Promise.all([
+      this.hydrateSwapListings(myListingsResult.data ?? [], userId),
+      this.hydrateSwapProposals(managerProposals, userId),
+      this.hydrateSwapListings(proposalListingsResult.data ?? [], userId),
+      this.hydrateSwapTransactions(refreshedTransactions, userId, false),
+    ]);
     const proposalListingMap = new Map(
       mappedProposalListings.map((listing) => [listing.id as string, listing]),
     );

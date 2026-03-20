@@ -9,6 +9,7 @@ type SocialUploadKind =
   | 'reel_thumbnail'
   | 'product_image'
   | 'status_media'
+  | 'live_cover'
   | 'social_avatar';
 
 @Injectable()
@@ -22,6 +23,7 @@ export class SocialUploadService {
   private readonly maxProductImageBytes = 10 * 1024 * 1024; // 10 MB
   private readonly maxStatusImageBytes = 10 * 1024 * 1024; // 10 MB
   private readonly maxStatusVideoBytes = 50 * 1024 * 1024; // 50 MB
+  private readonly maxLiveCoverBytes = 10 * 1024 * 1024; // 10 MB
   private readonly maxSocialAvatarBytes = 8 * 1024 * 1024; // 8 MB
 
   private readonly allowedImageMimeTypes = new Set([
@@ -53,6 +55,7 @@ export class SocialUploadService {
       normalized !== 'reel_thumbnail' &&
       normalized !== 'product_image' &&
       normalized !== 'status_media' &&
+      normalized !== 'live_cover' &&
       normalized !== 'social_avatar'
     ) {
       throw new BadRequestException('Invalid upload kind');
@@ -134,6 +137,18 @@ export class SocialUploadService {
       }
       if (isVideo && file.size > this.maxStatusVideoBytes) {
         throw new BadRequestException('Status video size exceeds 50 MB');
+      }
+      return;
+    }
+
+    if (kind === 'live_cover') {
+      if (!isImage) {
+        throw new BadRequestException(
+          'Live cover upload supports image files only',
+        );
+      }
+      if (file.size > this.maxLiveCoverBytes) {
+        throw new BadRequestException('Live cover image size exceeds 10 MB');
       }
       return;
     }
