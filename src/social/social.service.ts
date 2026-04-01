@@ -5030,9 +5030,7 @@ export class SocialService {
     if (!Array.isArray(values)) return [];
     return Array.from(
       new Set(
-        values
-          .map((entry) => this.normalizeToken(entry))
-          .filter(Boolean),
+        values.map((entry) => this.normalizeToken(entry)).filter(Boolean),
       ),
     );
   }
@@ -5040,7 +5038,8 @@ export class SocialService {
   private normalizeConditionToken(value?: string | null): string {
     const normalized = this.normalizeToken(value).replace(/[_-]+/g, ' ');
     if (!normalized) return 'good';
-    if (normalized.includes('new') && !normalized.includes('like')) return 'new';
+    if (normalized.includes('new') && !normalized.includes('like'))
+      return 'new';
     if (normalized.includes('like')) return 'like-new';
     if (normalized.includes('very')) return 'very-good';
     if (normalized.includes('fair')) return 'fair';
@@ -5061,9 +5060,7 @@ export class SocialService {
       ) {
         continue;
       }
-      const parsed = Number(
-        String(detail?.value ?? '').replace(/[^\d.]/g, ''),
-      );
+      const parsed = Number(String(detail?.value ?? '').replace(/[^\d.]/g, ''));
       if (Number.isFinite(parsed) && parsed > 0) {
         return parsed;
       }
@@ -5091,7 +5088,9 @@ export class SocialService {
     followingSet: Set<string>,
   ): any[] {
     const sourceSet = new Set(this.normalizeTokenList(options?.source));
-    const availabilitySet = new Set(this.normalizeTokenList(options?.availability));
+    const availabilitySet = new Set(
+      this.normalizeTokenList(options?.availability),
+    );
     const ratingSet = new Set(this.normalizeTokenList(options?.rating));
     const sellerTypeSet = new Set(this.normalizeTokenList(options?.sellerType));
     const sellerSet = new Set(this.normalizeTokenList(options?.seller));
@@ -5107,7 +5106,9 @@ export class SocialService {
     const locationNeedle = this.normalizeToken(options?.location);
 
     return products.filter((product) => {
-      const available = Number(product?.available_quantity ?? product?.quantity ?? 0);
+      const available = Number(
+        product?.available_quantity ?? product?.quantity ?? 0,
+      );
       const price = Number(product?.price ?? 0);
       const conditionToken = this.normalizeConditionToken(product?.condition);
       const brandToken = this.normalizeToken(product?.brand);
@@ -5248,22 +5249,22 @@ export class SocialService {
       sorted.sort((left, right) => {
         const leftDate = new Date(left?.created_at ?? '').getTime();
         const rightDate = new Date(right?.created_at ?? '').getTime();
-        return (Number.isFinite(rightDate) ? rightDate : 0) -
-          (Number.isFinite(leftDate) ? leftDate : 0);
+        return (
+          (Number.isFinite(rightDate) ? rightDate : 0) -
+          (Number.isFinite(leftDate) ? leftDate : 0)
+        );
       });
       return sorted;
     }
     if (sortMode === 'price_asc') {
       sorted.sort(
-        (left, right) =>
-          Number(left?.price ?? 0) - Number(right?.price ?? 0),
+        (left, right) => Number(left?.price ?? 0) - Number(right?.price ?? 0),
       );
       return sorted;
     }
     if (sortMode === 'price_desc') {
       sorted.sort(
-        (left, right) =>
-          Number(right?.price ?? 0) - Number(left?.price ?? 0),
+        (left, right) => Number(right?.price ?? 0) - Number(left?.price ?? 0),
       );
       return sorted;
     }
@@ -12129,45 +12130,311 @@ export class SocialService {
     return this.getSalesOrderById(userId, order.id);
   }
 
-  async getCategoryFilters(categoryId?: string) {
+  async getCategoryFilters(
+    categoryId?: string,
+    subcategoryId?: string,
+    subSubcategoryId?: string,
+  ) {
     const normalizedCategoryId = String(categoryId ?? '').trim();
     if (!normalizedCategoryId || normalizedCategoryId === 'all') {
       return [];
     }
 
-    const { data, error } = await this.serviceClient
-      .from('category_filter_config')
-      .select(
-        'filter_key, filter_label, filter_type, data_path, options, is_required, display_order',
-      )
-      .eq('category_id', normalizedCategoryId)
-      .eq('is_active', true)
-      .order('display_order', { ascending: true });
+    const normalizedSubcategoryId = String(subcategoryId ?? '').trim();
+    const normalizedSubSubcategoryId = String(subSubcategoryId ?? '').trim();
+    const hasSubcategory = Boolean(normalizedSubcategoryId);
+    const hasSubSubcategory = Boolean(normalizedSubSubcategoryId);
 
-    if (error) {
-      throw new BadRequestException(
-        `Failed to fetch category filters: ${error.message}`,
-      );
+    const normalizeFilterToken = (value: string) =>
+      String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+
+    const getFilterIdentityTokens = (row: {
+      key?: string;
+      dataPath?: string;
+    }) =>
+      new Set([
+        normalizeFilterToken(row.key ?? ''),
+        normalizeFilterToken(row.dataPath ?? ''),
+      ]);
+
+    const formatFilterRows = (rows: any[]) =>
+      rows.map((row: any) => {
+        const options = Array.isArray(row.options)
+          ? row.options
+              .map((entry: unknown) => String(entry ?? '').trim())
+              .filter(Boolean)
+          : [];
+
+        return {
+          key: String(row.filter_key ?? '').trim(),
+          label: String(row.filter_label ?? '').trim(),
+          type: String(row.filter_type ?? '').trim(),
+          dataPath:
+            String(row.data_path ?? '').trim() ||
+            String(row.filter_key ?? '').trim(),
+          options,
+          isRequired: Boolean(row.is_required),
+          subcategoryId: String(row.subcategory_id ?? '').trim() || null,
+          subSubcategoryId: String(row.sub_subcategory_id ?? '').trim() || null,
+        };
+      });
+
+    const taxonomyContext = {
+      subcategorySlug: '',
+      selectedSubSubcategoryName: '',
+      availableSubSubcategoryNames: [] as string[],
+    };
+
+    if (hasSubcategory) {
+      const { data: subcategoryRow, error: subcategoryError } =
+        await this.serviceClient
+          .from('subcategories')
+          .select('id, category_id, slug')
+          .eq('id', normalizedSubcategoryId)
+          .eq('is_active', true)
+          .maybeSingle();
+
+      if (subcategoryError) {
+        throw new BadRequestException(
+          `Failed to resolve subcategory filters: ${subcategoryError.message}`,
+        );
+      }
+
+      if (
+        subcategoryRow &&
+        String(subcategoryRow.category_id ?? '').trim() === normalizedCategoryId
+      ) {
+        taxonomyContext.subcategorySlug = String(
+          subcategoryRow.slug ?? '',
+        ).trim();
+
+        const { data: subSubRows, error: subSubError } = await this.serviceClient
+          .from('sub_subcategories')
+          .select('id, subcategory_id, name')
+          .eq('subcategory_id', normalizedSubcategoryId)
+          .eq('is_active', true)
+          .order('display_order', { ascending: true })
+          .order('name', { ascending: true });
+
+        if (subSubError) {
+          throw new BadRequestException(
+            `Failed to resolve sub-subcategory filters: ${subSubError.message}`,
+          );
+        }
+
+        const normalizedSubSubNames = Array.from(
+          new Set(
+            (subSubRows ?? [])
+              .map((row: any) => String(row.name ?? '').trim())
+              .filter(Boolean),
+          ),
+        );
+        taxonomyContext.availableSubSubcategoryNames = normalizedSubSubNames;
+
+        if (hasSubSubcategory) {
+          const selectedSubSub = (subSubRows ?? []).find(
+            (row: any) => String(row.id ?? '').trim() === normalizedSubSubcategoryId,
+          );
+          if (selectedSubSub) {
+            taxonomyContext.selectedSubSubcategoryName = String(
+              selectedSubSub.name ?? '',
+            ).trim();
+          }
+        }
+      }
     }
 
-    return (data ?? []).map((row: any) => {
-      const options = Array.isArray(row.options)
-        ? row.options
-            .map((entry: unknown) => String(entry ?? '').trim())
-            .filter(Boolean)
-        : [];
+    const applyTaxonomyAwareAdjustments = (filters: any[]) => {
+      if (!Array.isArray(filters) || filters.length === 0) return [];
+      let scopedFilters = [...filters];
 
-      return {
-        key: String(row.filter_key ?? '').trim(),
-        label: String(row.filter_label ?? '').trim(),
-        type: String(row.filter_type ?? '').trim(),
-        dataPath:
-          String(row.data_path ?? '').trim() ||
-          String(row.filter_key ?? '').trim(),
-        options,
-        isRequired: Boolean(row.is_required),
-      };
-    });
+      const normalizedSubcategorySlug = normalizeFilterToken(
+        taxonomyContext.subcategorySlug,
+      );
+      if (normalizedSubcategorySlug) {
+        let allowList: string[] = [];
+
+        if (normalizedSubcategorySlug.includes('bag')) {
+          allowList = ['gender', 'bagtype', 'material', 'style', 'season'];
+        } else if (
+          normalizedSubcategorySlug.includes('jewel') ||
+          normalizedSubcategorySlug.includes('watch')
+        ) {
+          allowList = ['gender', 'stone', 'material', 'style', 'season'];
+        } else if (normalizedSubcategorySlug.includes('eyewear')) {
+          allowList = ['gender', 'style', 'material', 'season'];
+        } else if (
+          normalizedSubcategorySlug.includes('clothing') ||
+          normalizedSubcategorySlug.includes('underwear')
+        ) {
+          allowList = ['gender', 'producttype', 'style', 'material', 'season'];
+        }
+
+        if (allowList.length > 0) {
+          const allowSet = new Set(allowList.map((item) => normalizeFilterToken(item)));
+          const narrowed = scopedFilters.filter((filter) => {
+            const tokens = getFilterIdentityTokens(filter);
+            for (const token of tokens) {
+              if (allowSet.has(token)) {
+                return true;
+              }
+            }
+            return false;
+          });
+          if (narrowed.length > 0) {
+            scopedFilters = narrowed;
+          }
+        }
+      }
+
+      const genericCollectionTokens = new Set([
+        'popular',
+        'newarrivals',
+        'bestsellers',
+        'featured',
+        'trending',
+      ]);
+      const selectedSubSubcategoryName = String(
+        taxonomyContext.selectedSubSubcategoryName ?? '',
+      ).trim();
+      const selectedSubSubToken = normalizeFilterToken(selectedSubSubcategoryName);
+
+      const availableSpecificTaxonomyOptions = Array.from(
+        new Set(
+          taxonomyContext.availableSubSubcategoryNames
+            .map((value) => String(value ?? '').trim())
+            .filter(Boolean)
+            .filter(
+              (value) => !genericCollectionTokens.has(normalizeFilterToken(value)),
+            ),
+        ),
+      );
+
+      let taxonomyOptions: string[] = [];
+      if (selectedSubSubToken) {
+        if (!genericCollectionTokens.has(selectedSubSubToken)) {
+          taxonomyOptions = [selectedSubSubcategoryName];
+        }
+      } else {
+        taxonomyOptions = availableSpecificTaxonomyOptions;
+      }
+
+      if (taxonomyOptions.length > 0) {
+        const typeTokens = new Set(['producttype', 'shoetype']);
+        let overridden = false;
+        scopedFilters = scopedFilters.map((filter) => {
+          const tokens = getFilterIdentityTokens(filter);
+          const matchesType = Array.from(tokens).some((token) =>
+            typeTokens.has(token),
+          );
+          if (!matchesType) return filter;
+          overridden = true;
+          return {
+            ...filter,
+            options: taxonomyOptions,
+            type: 'single-select',
+            isRequired:
+              filter.isRequired || Boolean(taxonomyContext.selectedSubSubcategoryName),
+          };
+        });
+
+        if (!overridden) {
+          scopedFilters = [
+            {
+              key: 'productType',
+              label: 'Product Type',
+              type: 'single-select',
+              dataPath: 'ProductType',
+              options: taxonomyOptions,
+              isRequired: Boolean(taxonomyContext.selectedSubSubcategoryName),
+              subcategoryId: normalizedSubcategoryId || null,
+              subSubcategoryId: normalizedSubSubcategoryId || null,
+            },
+            ...scopedFilters,
+          ];
+        }
+      }
+
+      return scopedFilters;
+    };
+
+    const selectWithScope =
+      'filter_key, filter_label, filter_type, data_path, options, is_required, display_order, subcategory_id, sub_subcategory_id';
+    const selectWithoutScope =
+      'filter_key, filter_label, filter_type, data_path, options, is_required, display_order';
+
+    const tryScopedQuery = async () =>
+      this.serviceClient
+        .from('category_filter_config')
+        .select(selectWithScope)
+        .eq('category_id', normalizedCategoryId)
+        .eq('is_active', true)
+        .order('display_order', { ascending: true });
+
+    let rows: any[] = [];
+    const scopedResult = await tryScopedQuery();
+    if (scopedResult.error) {
+      const message = String(scopedResult.error.message ?? '').toLowerCase();
+      const missingScopeColumns =
+        message.includes('subcategory_id') ||
+        message.includes('sub_subcategory_id');
+      if (!missingScopeColumns) {
+        throw new BadRequestException(
+          `Failed to fetch category filters: ${scopedResult.error.message}`,
+        );
+      }
+
+      const legacyResult = await this.serviceClient
+        .from('category_filter_config')
+        .select(selectWithoutScope)
+        .eq('category_id', normalizedCategoryId)
+        .eq('is_active', true)
+        .order('display_order', { ascending: true });
+      if (legacyResult.error) {
+        throw new BadRequestException(
+          `Failed to fetch category filters: ${legacyResult.error.message}`,
+        );
+      }
+      rows = legacyResult.data ?? [];
+      return applyTaxonomyAwareAdjustments(formatFilterRows(rows));
+    }
+
+    rows = scopedResult.data ?? [];
+    const normalizedRows = formatFilterRows(rows);
+    const matchesCategoryLevel = normalizedRows.filter(
+      (row: any) => !row.subcategoryId && !row.subSubcategoryId,
+    );
+
+    if (hasSubcategory && hasSubSubcategory) {
+      const matchesExactScope = normalizedRows.filter(
+        (row: any) =>
+          row.subcategoryId === normalizedSubcategoryId &&
+          row.subSubcategoryId === normalizedSubSubcategoryId,
+      );
+      if (matchesExactScope.length > 0) {
+        return applyTaxonomyAwareAdjustments(matchesExactScope);
+      }
+    }
+
+    if (hasSubcategory) {
+      const matchesSubcategoryScope = normalizedRows.filter(
+        (row: any) =>
+          row.subcategoryId === normalizedSubcategoryId &&
+          !row.subSubcategoryId,
+      );
+      if (matchesSubcategoryScope.length > 0) {
+        return applyTaxonomyAwareAdjustments(matchesSubcategoryScope);
+      }
+    }
+
+    if (matchesCategoryLevel.length > 0) {
+      return applyTaxonomyAwareAdjustments(matchesCategoryLevel);
+    }
+
+    return applyTaxonomyAwareAdjustments(normalizedRows);
   }
 
   async getTaxonomy() {

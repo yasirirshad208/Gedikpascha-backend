@@ -531,8 +531,16 @@ export class SocialController {
   }
 
   @Get('category-filters')
-  async getCategoryFilters(@Query('categoryId') categoryId?: string) {
-    return this.socialService.getCategoryFilters(categoryId);
+  async getCategoryFilters(
+    @Query('categoryId') categoryId?: string,
+    @Query('subcategoryId') subcategoryId?: string,
+    @Query('subSubcategoryId') subSubcategoryId?: string,
+  ) {
+    return this.socialService.getCategoryFilters(
+      categoryId,
+      subcategoryId,
+      subSubcategoryId,
+    );
   }
 
   @Get('closet/search')

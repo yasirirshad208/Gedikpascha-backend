@@ -51,7 +51,9 @@ export class SocialLiveProviderService {
     this.joinUrlBase = String(
       process.env.SOCIAL_LIVE_VIEWER_URL_BASE ?? '',
     ).trim();
-    const ttlSeconds = Number(process.env.SOCIAL_LIVE_TOKEN_TTL_SECONDS ?? 3600);
+    const ttlSeconds = Number(
+      process.env.SOCIAL_LIVE_TOKEN_TTL_SECONDS ?? 3600,
+    );
     this.tokenTtlSeconds =
       Number.isFinite(ttlSeconds) && ttlSeconds > 60
         ? Math.min(24 * 60 * 60, Math.floor(ttlSeconds))
@@ -66,9 +68,9 @@ export class SocialLiveProviderService {
   private hasLiveKitCredentials(): boolean {
     return Boolean(
       this.livekitUrl &&
-        this.livekitApiKey &&
-        this.livekitApiSecret &&
-        this.configuredProvider === 'livekit',
+      this.livekitApiKey &&
+      this.livekitApiSecret &&
+      this.configuredProvider === 'livekit',
     );
   }
 
@@ -131,15 +133,11 @@ export class SocialLiveProviderService {
     const provider: 'livekit' | 'mock' = useLiveKit ? 'livekit' : 'mock';
 
     const hostToken = useLiveKit
-      ? this.createLiveKitToken(
-          `host:${context.hostId}`,
-          providerRoomId,
-          {
-            canPublish: true,
-            canSubscribe: true,
-            canPublishData: true,
-          },
-        )
+      ? this.createLiveKitToken(`host:${context.hostId}`, providerRoomId, {
+          canPublish: true,
+          canSubscribe: true,
+          canPublishData: true,
+        })
       : this.hashToken([
           context.sessionId,
           context.hostId,
@@ -164,15 +162,11 @@ export class SocialLiveProviderService {
     const useLiveKit = this.hasLiveKitCredentials();
     const provider: 'livekit' | 'mock' = useLiveKit ? 'livekit' : 'mock';
     const viewerToken = useLiveKit
-      ? this.createLiveKitToken(
-          `viewer:${userId}`,
-          providerRoomId,
-          {
-            canPublish: false,
-            canSubscribe: true,
-            canPublishData: true,
-          },
-        )
+      ? this.createLiveKitToken(`viewer:${userId}`, providerRoomId, {
+          canPublish: false,
+          canSubscribe: true,
+          canPublishData: true,
+        })
       : this.hashToken([
           sessionId,
           userId,
