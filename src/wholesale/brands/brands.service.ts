@@ -7,10 +7,14 @@ import {
 import { SupabaseService } from '../../supabase/supabase.service';
 import { RegisterBrandDto } from './dto/register-brand';
 import { UpdateBrandDto } from './dto/update-brand';
+import { SubMerchantsService } from '../../payments/sub-merchants/sub-merchants.service';
 
 @Injectable()
 export class BrandsService {
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(
+    private readonly supabaseService: SupabaseService,
+    private readonly subMerchantsService: SubMerchantsService,
+  ) {}
 
   async registerBrand(registerBrandDto: RegisterBrandDto, userId: string) {
     // Use service client for all operations to bypass RLS issues with users table
@@ -316,11 +320,62 @@ export class BrandsService {
       );
     }
 
+    // Phase 2: when a brand is approved, submit its sub-merchant draft to Iyzico
+    // so it can receive payouts. Never let a payout failure block the approval.
+    let payoutOnboarding: { attempted: boolean; ok: boolean; message?: string } = {
+      attempted: false,
+      ok: false,
+    };
+    if (status === 'approved') {
+      payoutOnboarding = await this.tryOnboardSubMerchant(brandId);
+    }
+
     return {
       id: data.id,
       status: data.status,
       message: `Brand ${status} successfully`,
+      payoutOnboarding,
     };
+  }
+
+  /**
+   * Submit the brand's sub-merchant draft to Iyzico. Returns a soft result —
+   * if the seller hasn't filled in payout details yet, or Iyzico rejects it,
+   * the brand stays approved and admins can retry from the dashboard.
+   */
+  private async tryOnboardSubMerchant(
+    brandId: string,
+  ): Promise<{ attempted: boolean; ok: boolean; message?: string }> {
+    try {
+      const subMerchant = await this.subMerchantsService.findByBrand(
+        'wholesale_brand',
+        brandId,
+      );
+      if (!subMerchant) {
+        return {
+          attempted: false,
+          ok: false,
+          message: 'No payout details submitted by the seller yet.',
+        };
+      }
+      const result = await this.subMerchantsService.submit(
+        (subMerchant as { id: string }).id,
+      );
+      return {
+        attempted: true,
+        ok: result.status === 'active',
+        message:
+          result.status === 'active'
+            ? 'Sub-merchant active.'
+            : `Sub-merchant submission returned status '${result.status}'.`,
+      };
+    } catch (err) {
+      return {
+        attempted: true,
+        ok: false,
+        message: `Sub-merchant onboarding failed: ${(err as Error).message}`,
+      };
+    }
   }
 
   async updateBrand(userId: string, updateBrandDto: UpdateBrandDto) {

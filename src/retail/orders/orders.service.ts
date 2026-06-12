@@ -296,9 +296,15 @@ export class OrdersService {
       case 'shipped':
         updateData.shipped_at = new Date().toISOString();
         break;
-      case 'delivered':
-        updateData.delivered_at = new Date().toISOString();
+      case 'delivered': {
+        const deliveredAt = new Date();
+        updateData.delivered_at = deliveredAt.toISOString();
+        // B2C 14-day withdrawal right (Law 6502) starts at delivery.
+        updateData.refund_due_until = new Date(
+          deliveredAt.getTime() + 14 * 24 * 60 * 60 * 1000,
+        ).toISOString();
         break;
+      }
       case 'cancelled':
         updateData.cancelled_at = new Date().toISOString();
         break;

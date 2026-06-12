@@ -19,6 +19,7 @@ import { AdminModule } from './admin/admin.module';
 import { PublicCategoriesModule } from './public/categories/categories.module';
 import { AdminOnlyGuard } from './admin/guards/admin-only.guard';
 import { SocialModule } from './social/social.module';
+import { PaymentsModule } from './payments/payments.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { SocialModule } from './social/social.module';
     AdminModule,
     PublicCategoriesModule,
     SocialModule,
+    PaymentsModule,
   ],
   controllers: [AppController],
   providers: [

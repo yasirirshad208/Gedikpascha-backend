@@ -9,7 +9,8 @@ async function bootstrap() {
   // Create app with body parser enabled for JSON, but multer will handle multipart
   const app = await NestFactory.create(AppModule, {
     bodyParser: true,
-    rawBody: false,
+    // rawBody required by /payments/webhook for Iyzico HMAC verification.
+    rawBody: true,
   });
 
   // Enable CORS for frontend
