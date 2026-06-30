@@ -38,13 +38,21 @@ export class IyzicoService implements OnModuleInit {
   constructor(private readonly config: IyzicoConfig) {}
 
   onModuleInit(): void {
+    if (!this.config.isReady()) {
+      this.logger.warn(
+        'Iyzico client NOT initialised — API keys are missing or placeholder. ' +
+        'Payment endpoints will return 503 until real keys are configured.',
+      );
+      return;
+    }
+
     this.client = new Iyzipay({
       apiKey: this.config.apiKey,
       secretKey: this.config.apiSecret,
       uri: this.config.baseUrl,
     });
     this.logger.log(
-      `Iyzico client initialised (base: ${this.config.baseUrl}, currency: ${this.config.defaultCurrency}, ready: ${this.config.isReady()})`,
+      `Iyzico client initialised (base: ${this.config.baseUrl}, currency: ${this.config.defaultCurrency})`,
     );
   }
 
