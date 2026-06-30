@@ -4,6 +4,7 @@ import { PaymentsService } from './payments.service';
 import { IyzicoService } from './iyzico/iyzico.service';
 import { IyzicoConfig } from './iyzico/iyzico.config';
 import { CommissionCalculator } from './helpers/commission.calculator';
+import { OrderLocator } from './helpers/order-locator';
 import { SubMerchantsService } from './sub-merchants/sub-merchants.service';
 import { SubMerchantsController } from './sub-merchants/sub-merchants.controller';
 import { RefundsService } from './refunds/refunds.service';
@@ -24,6 +25,7 @@ import { PayoutScheduler } from './payouts/payout-scheduler.service';
     IyzicoService,
     IyzicoConfig,
     CommissionCalculator,
+    OrderLocator,
     SubMerchantsService,
     RefundsService,
     PayoutsService,

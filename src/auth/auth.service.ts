@@ -27,30 +27,45 @@ export class AuthService {
     });
 
     if (error) {
-      throw new BadRequestException(
-        error.message || 'Failed to create account',
-      );
+      const friendlyMessage = this.mapSignupError(error.message);
+      throw new BadRequestException(friendlyMessage);
     }
 
-    // If user was created successfully, insert into users table
+    // If user was created successfully, upsert into users table.
+    // We use upsert (ON CONFLICT id DO UPDATE) because the DB trigger
+    // handle_new_user() may have already inserted the row. Using plain
+    // insert would throw a unique-violation in that race.
     if (data.user?.id) {
       try {
-        const { error: userError } = await supabase.from('users').insert({
-          id: data.user.id,
-          full_name: signupDto.fullName,
-          email: signupDto.email,
-          is_email_verified: data.user.email_confirmed_at ? true : false,
-          email_verified_at: data.user.email_confirmed_at || null,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
+        const { error: userError } = await supabase
+          .from('users')
+          .upsert(
+            {
+              id: data.user.id,
+              full_name: signupDto.fullName,
+              email: signupDto.email,
+              is_email_verified: data.user.email_confirmed_at ? true : false,
+              email_verified_at: data.user.email_confirmed_at || null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'id' },
+          );
 
         if (userError) {
-          // Don't fail signup if users table insert fails
-          // The user is already created in auth.users
+          // Don't fail signup if users table upsert fails
+          // The user is already created in auth.users and the trigger
+          // should have backfilled the profile row.
+          console.warn(
+            `[AuthService.signup] users upsert warning for ${data.user.id}: ${userError.message}`,
+          );
         }
       } catch (err) {
         // Non-blocking error - auth user is already created
+        console.warn(
+          `[AuthService.signup] users upsert exception for ${data.user?.id}:`,
+          err,
+        );
       }
     }
 
@@ -75,9 +90,9 @@ export class AuthService {
     });
 
     if (error) {
-      throw new UnauthorizedException(
-        error.message || 'Invalid email or password',
-      );
+      // Map Supabase's raw error messages to user-friendly messages
+      const friendlyMessage = this.mapLoginError(error.message);
+      throw new UnauthorizedException(friendlyMessage);
     }
 
     // Update last_login_at in users table
@@ -263,5 +278,69 @@ export class AuthService {
       expires_at: data.session.expires_at,
       expires_in: data.session.expires_in,
     };
+  }
+
+  /**
+   * Maps Supabase's raw login error messages to user-friendly messages.
+   */
+  private mapLoginError(raw: string): string {
+    const lower = raw.toLowerCase();
+
+    if (lower.includes('invalid login credentials')) {
+      return 'Incorrect email or password. Please try again.';
+    }
+    if (lower.includes('email not confirmed')) {
+      return 'Your email has not been verified yet. Please check your inbox for a verification link.';
+    }
+    if (lower.includes('user not found')) {
+      return 'No account found with this email address. Please sign up first.';
+    }
+    if (lower.includes('too many requests') || lower.includes('rate limit')) {
+      return 'Too many login attempts. Please wait a moment and try again.';
+    }
+    if (lower.includes('user banned') || lower.includes('user is banned')) {
+      return 'Your account has been suspended. Please contact support.';
+    }
+    if (lower.includes('network') || lower.includes('fetch')) {
+      return 'Unable to connect to the server. Please check your internet connection.';
+    }
+
+    // Fallback: return a generic but clear message instead of the raw Supabase error
+    return 'Incorrect email or password. Please try again.';
+  }
+
+  /**
+   * Maps Supabase's raw signup error messages to user-friendly messages.
+   */
+  private mapSignupError(raw: string): string {
+    const lower = raw.toLowerCase();
+
+    if (lower.includes('user already registered') || lower.includes('already been registered')) {
+      return 'An account with this email already exists. Please sign in instead.';
+    }
+    if (lower.includes('password') && lower.includes('weak')) {
+      return 'Your password is too weak. Please use at least 8 characters with a mix of letters and numbers.';
+    }
+    if (lower.includes('password') && (lower.includes('short') || lower.includes('length'))) {
+      return 'Password must be at least 8 characters long.';
+    }
+    if (lower.includes('valid email') || lower.includes('invalid email')) {
+      return 'Please enter a valid email address.';
+    }
+    if (lower.includes('too many requests') || lower.includes('rate limit')) {
+      return 'Too many signup attempts. Please wait a moment and try again.';
+    }
+    if (lower.includes('signups not allowed') || lower.includes('signup is disabled')) {
+      return 'New registrations are currently disabled. Please try again later.';
+    }
+    if (lower.includes('database error saving new user')) {
+      return 'There was a problem creating your account. Please try again.';
+    }
+    if (lower.includes('network') || lower.includes('fetch')) {
+      return 'Unable to connect to the server. Please check your internet connection.';
+    }
+
+    // Fallback
+    return 'Failed to create account. Please try again.';
   }
 }
