@@ -3,11 +3,17 @@ import {
   UnauthorizedException,
   BadRequestException,
 } from '@nestjs/common';
+import type { Session, User } from '@supabase/supabase-js';
 import { SupabaseService } from '../supabase/supabase.service';
 import { LoginDto } from './dto/login.dto';
 import { SignupDto } from './dto/signup.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+
+// Dev-mode shortcut: skip email verification entirely by creating accounts
+// pre-confirmed via the admin API (this never sends a confirmation email,
+// unlike signUp()). Set to false to restore the normal confirm-by-email flow.
+const SKIP_EMAIL_VERIFICATION = true;
 
 @Injectable()
 export class AuthService {
@@ -16,36 +22,82 @@ export class AuthService {
   async signup(signupDto: SignupDto) {
     const supabase = this.supabaseService.getClient();
 
-    const { data, error } = await supabase.auth.signUp({
-      email: signupDto.email,
-      password: signupDto.password,
-      options: {
-        data: {
-          full_name: signupDto.fullName,
-        },
-      },
-    });
+    let user: User | null = null;
+    let session: Session | null = null;
+    let message: string;
 
-    if (error) {
-      const friendlyMessage = this.mapSignupError(error.message);
-      throw new BadRequestException(friendlyMessage);
+    if (SKIP_EMAIL_VERIFICATION) {
+      const serviceClient = this.supabaseService.getServiceClient();
+      const { data: createdData, error: createError } =
+        await serviceClient.auth.admin.createUser({
+          email: signupDto.email,
+          password: signupDto.password,
+          email_confirm: true,
+          user_metadata: {
+            full_name: signupDto.fullName,
+          },
+        });
+
+      if (createError) {
+        const friendlyMessage = this.mapSignupError(createError.message);
+        throw new BadRequestException(friendlyMessage);
+      }
+
+      user = createdData.user;
+
+      const { data: signInData, error: signInError } =
+        await supabase.auth.signInWithPassword({
+          email: signupDto.email,
+          password: signupDto.password,
+        });
+
+      if (signInError) {
+        console.warn(
+          `[AuthService.signup] auto sign-in failed for ${user?.id}: ${signInError.message}`,
+        );
+      } else {
+        session = signInData.session;
+        user = signInData.user ?? user;
+      }
+
+      message = 'Account created successfully.';
+    } else {
+      const { data, error } = await supabase.auth.signUp({
+        email: signupDto.email,
+        password: signupDto.password,
+        options: {
+          data: {
+            full_name: signupDto.fullName,
+          },
+        },
+      });
+
+      if (error) {
+        const friendlyMessage = this.mapSignupError(error.message);
+        throw new BadRequestException(friendlyMessage);
+      }
+
+      user = data.user;
+      session = data.session;
+      message =
+        'Account created successfully. Please check your email to verify your account.';
     }
 
     // If user was created successfully, upsert into users table.
     // We use upsert (ON CONFLICT id DO UPDATE) because the DB trigger
     // handle_new_user() may have already inserted the row. Using plain
     // insert would throw a unique-violation in that race.
-    if (data.user?.id) {
+    if (user?.id) {
       try {
         const { error: userError } = await supabase
           .from('users')
           .upsert(
             {
-              id: data.user.id,
+              id: user.id,
               full_name: signupDto.fullName,
               email: signupDto.email,
-              is_email_verified: data.user.email_confirmed_at ? true : false,
-              email_verified_at: data.user.email_confirmed_at || null,
+              is_email_verified: user.email_confirmed_at ? true : false,
+              email_verified_at: user.email_confirmed_at || null,
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
             },
@@ -57,23 +109,22 @@ export class AuthService {
           // The user is already created in auth.users and the trigger
           // should have backfilled the profile row.
           console.warn(
-            `[AuthService.signup] users upsert warning for ${data.user.id}: ${userError.message}`,
+            `[AuthService.signup] users upsert warning for ${user.id}: ${userError.message}`,
           );
         }
       } catch (err) {
         // Non-blocking error - auth user is already created
         console.warn(
-          `[AuthService.signup] users upsert exception for ${data.user?.id}:`,
+          `[AuthService.signup] users upsert exception for ${user?.id}:`,
           err,
         );
       }
     }
 
     return {
-      user: data.user,
-      session: data.session,
-      message:
-        'Account created successfully. Please check your email to verify your account.',
+      user,
+      session,
+      message,
     };
   }
 
