@@ -234,6 +234,23 @@ export class RetailProductsService {
       }
     }
 
+    // Hydrate images and variations so the edit form can prefill them.
+    const [imagesResult, variationsResult] = await Promise.all([
+      supabase
+        .from('retail_product_images')
+        .select('id, image_url, display_order, alt_text, is_primary')
+        .eq('product_id', productId)
+        .order('display_order', { ascending: true }),
+      supabase
+        .from('retail_product_variations')
+        .select('id, variation_type, name, value, is_available, display_order')
+        .eq('product_id', productId)
+        .order('display_order', { ascending: true }),
+    ]);
+
+    product.images = imagesResult.data || [];
+    product.variations = variationsResult.data || [];
+
     return product;
   }
 
@@ -242,15 +259,35 @@ export class RetailProductsService {
     userId: string,
     updateData: {
       name?: string;
+      slug?: string;
+      sku?: string;
       description?: string;
       shortDescription?: string;
       retailPrice?: number;
+      compareAtPrice?: number | null;
       salePercentage?: number;
       status?: 'draft' | 'active' | 'inactive';
+      categoryId?: string | null;
+      subcategoryId?: string | null;
       metaTitle?: string;
       metaDescription?: string;
+      metaKeywords?: string;
       lowStockThreshold?: number;
       preservedQuantity?: number;
+      productDetails?: Record<string, any> | null;
+      images?: Array<{
+        imageUrl: string;
+        displayOrder?: number;
+        altText?: string;
+        isPrimary?: boolean;
+      }>;
+      variations?: Array<{
+        variationType: string;
+        name: string;
+        value?: string;
+        isAvailable?: boolean;
+        displayOrder?: number;
+      }>;
     },
   ) {
     const supabase = this.supabaseService.getServiceClient();
@@ -338,6 +375,64 @@ export class RetailProductsService {
       }
     }
 
+    // Validate slug (unique per brand, excluding this product)
+    if (updateData.slug !== undefined) {
+      const slug = (updateData.slug || '').trim();
+      if (!slug) {
+        throw new BadRequestException('Slug cannot be empty');
+      }
+      const { data: slugClash } = await supabase
+        .from('retail_products')
+        .select('id')
+        .eq('retail_brand_id', retailBrand.id)
+        .eq('slug', slug)
+        .neq('id', productId)
+        .is('deleted_at', null)
+        .maybeSingle();
+      if (slugClash) {
+        throw new BadRequestException(
+          'A product with this slug already exists in your store.',
+        );
+      }
+    }
+
+    // Validate SKU (globally unique, excluding this product)
+    if (updateData.sku !== undefined && updateData.sku) {
+      const { data: skuClash } = await supabase
+        .from('retail_products')
+        .select('id')
+        .eq('sku', updateData.sku)
+        .neq('id', productId)
+        .maybeSingle();
+      if (skuClash) {
+        throw new BadRequestException('A product with this SKU already exists.');
+      }
+    }
+
+    // Validate compare-at price
+    if (
+      updateData.compareAtPrice !== undefined &&
+      updateData.compareAtPrice !== null &&
+      updateData.compareAtPrice < 0
+    ) {
+      throw new BadRequestException('Compare-at price cannot be negative');
+    }
+
+    // Validate category if provided
+    if (updateData.categoryId) {
+      const { data: category } = await supabase
+        .from('categories')
+        .select('id, is_active')
+        .eq('id', updateData.categoryId)
+        .maybeSingle();
+      if (!category) {
+        throw new BadRequestException('Category not found');
+      }
+      if (!category.is_active) {
+        throw new BadRequestException('Cannot use an inactive category');
+      }
+    }
+
     // Prepare update object
     const updateObject: any = {
       updated_at: new Date().toISOString(),
@@ -373,6 +468,27 @@ export class RetailProductsService {
     if (updateData.preservedQuantity !== undefined) {
       updateObject.preserved_quantity = updateData.preservedQuantity;
     }
+    if (updateData.slug !== undefined) {
+      updateObject.slug = updateData.slug.trim();
+    }
+    if (updateData.sku !== undefined) {
+      updateObject.sku = updateData.sku ? updateData.sku.trim() : null;
+    }
+    if (updateData.compareAtPrice !== undefined) {
+      updateObject.compare_at_price = updateData.compareAtPrice ?? null;
+    }
+    if (updateData.categoryId !== undefined) {
+      updateObject.category_id = updateData.categoryId || null;
+    }
+    if (updateData.subcategoryId !== undefined) {
+      updateObject.subcategory_id = updateData.subcategoryId || null;
+    }
+    if (updateData.metaKeywords !== undefined) {
+      updateObject.meta_keywords = updateData.metaKeywords || null;
+    }
+    if (updateData.productDetails !== undefined) {
+      updateObject.product_details = updateData.productDetails || null;
+    }
 
     // Update the product
     const { data: updatedProduct, error: updateError } = await supabase
@@ -389,7 +505,59 @@ export class RetailProductsService {
       );
     }
 
-    return updatedProduct;
+    // Replace images if provided (full ordered set).
+    if (updateData.images !== undefined) {
+      await supabase
+        .from('retail_product_images')
+        .delete()
+        .eq('product_id', productId);
+
+      if (updateData.images.length > 0) {
+        const imageRecords = updateData.images.map((img, index) => ({
+          product_id: productId,
+          image_url: img.imageUrl,
+          display_order: img.displayOrder ?? index,
+          alt_text: img.altText || null,
+          is_primary: img.isPrimary ?? index === 0,
+        }));
+        const { error: imagesError } = await supabase
+          .from('retail_product_images')
+          .insert(imageRecords);
+        if (imagesError) {
+          console.error('Failed to update retail product images:', imagesError);
+        }
+      }
+    }
+
+    // Replace variations if provided (full set).
+    if (updateData.variations !== undefined) {
+      await supabase
+        .from('retail_product_variations')
+        .delete()
+        .eq('product_id', productId);
+
+      if (updateData.variations.length > 0) {
+        const variationRecords = updateData.variations.map((v, index) => ({
+          product_id: productId,
+          variation_type: v.variationType,
+          name: v.name,
+          value: v.value || null,
+          is_available: v.isAvailable ?? true,
+          display_order: v.displayOrder ?? index,
+        }));
+        const { error: variationsError } = await supabase
+          .from('retail_product_variations')
+          .insert(variationRecords);
+        if (variationsError) {
+          console.error(
+            'Failed to update retail product variations:',
+            variationsError,
+          );
+        }
+      }
+    }
+
+    return this.getProductById(productId, userId);
   }
 
   async getPublicProducts(
@@ -1364,4 +1532,492 @@ export class RetailProductsService {
     }
     return { success: true };
   }
+
+  // ---------------------------------------------------------------------------
+  // Import from own wholesale catalog into own retail store
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Lists the wholesale products owned by this user (via their approved
+   * wholesale brand) so they can be cross-listed into their retail store.
+   * Each item is flagged with whether it has already been imported.
+   */
+  async getImportableWholesaleProducts(userId: string) {
+    const supabase = this.supabaseService.getServiceClient();
+
+    // The user must own both an approved wholesale brand (source) and an
+    // approved retail brand (destination). If either is missing there is
+    // nothing to import — return an empty list with the reason.
+    const [wholesaleBrandRes, retailBrandRes] = await Promise.all([
+      supabase
+        .from('wholesale_brands')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('status', 'approved')
+        .maybeSingle(),
+      supabase
+        .from('retail_brands')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('status', 'approved')
+        .maybeSingle(),
+    ]);
+
+    const wholesaleBrand = wholesaleBrandRes.data;
+    const retailBrand = retailBrandRes.data;
+
+    if (!wholesaleBrand) {
+      return {
+        products: [],
+        hasWholesaleBrand: false,
+        hasRetailBrand: !!retailBrand,
+      };
+    }
+    if (!retailBrand) {
+      return {
+        products: [],
+        hasWholesaleBrand: true,
+        hasRetailBrand: false,
+      };
+    }
+
+    // Load the wholesale products for this brand.
+    const { data: products, error: productsError } = await supabase
+      .from('wholesale_products')
+      .select(
+        'id, name, slug, sku, wholesale_price, retail_price, status, stock_quantity',
+      )
+      .eq('wholesale_brand_id', wholesaleBrand.id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false });
+
+    if (productsError) {
+      throw new BadRequestException(
+        `Failed to load wholesale products: ${productsError.message || 'Unknown error'}`,
+      );
+    }
+
+    const productIds = (products || []).map((p) => p.id);
+    if (productIds.length === 0) {
+      return { products: [], hasWholesaleBrand: true, hasRetailBrand: true };
+    }
+
+    // Fetch pack sizes, primary images, and existing retail imports in parallel.
+    const [packsRes, imagesRes, importedRes] = await Promise.all([
+      supabase
+        .from('wholesale_product_pack_sizes')
+        .select('id, product_id, label, quantity, pack_price, unit_price')
+        .in('product_id', productIds)
+        .order('display_order', { ascending: true }),
+      supabase
+        .from('wholesale_product_images')
+        .select('product_id, image_url, is_primary, display_order')
+        .in('product_id', productIds)
+        .order('display_order', { ascending: true }),
+      supabase
+        .from('retail_products')
+        .select('id, slug, source_wholesale_product_id')
+        .eq('retail_brand_id', retailBrand.id)
+        .in('source_wholesale_product_id', productIds)
+        .is('deleted_at', null),
+    ]);
+
+    const packsByProduct = new Map<string, any[]>();
+    (packsRes.data || []).forEach((pack) => {
+      const list = packsByProduct.get(pack.product_id) || [];
+      list.push({
+        id: pack.id,
+        label: pack.label,
+        quantity: pack.quantity,
+        packPrice: pack.pack_price,
+        unitPrice:
+          pack.unit_price ??
+          (pack.quantity ? Number(pack.pack_price) / pack.quantity : null),
+      });
+      packsByProduct.set(pack.product_id, list);
+    });
+
+    const imageByProduct = new Map<string, string>();
+    (imagesRes.data || []).forEach((img) => {
+      if (!imageByProduct.has(img.product_id)) {
+        imageByProduct.set(img.product_id, img.image_url);
+      }
+      if (img.is_primary) {
+        imageByProduct.set(img.product_id, img.image_url);
+      }
+    });
+
+    const importedByProduct = new Map<string, { id: string; slug: string }>();
+    (importedRes.data || []).forEach((rp) => {
+      if (rp.source_wholesale_product_id) {
+        importedByProduct.set(rp.source_wholesale_product_id, {
+          id: rp.id,
+          slug: rp.slug,
+        });
+      }
+    });
+
+    const result = (products || []).map((p) => {
+      const packs = packsByProduct.get(p.id) || [];
+      const imported = importedByProduct.get(p.id) || null;
+      return {
+        id: p.id,
+        name: p.name,
+        slug: p.slug,
+        sku: p.sku,
+        wholesalePrice: p.wholesale_price,
+        suggestedRetailPrice: p.retail_price,
+        status: p.status,
+        stockQuantity: p.stock_quantity,
+        primaryImage: imageByProduct.get(p.id) || null,
+        packSizes: packs,
+        hasPacks: packs.length > 0,
+        alreadyImported: !!imported,
+        importedRetailProduct: imported,
+      };
+    });
+
+    return { products: result, hasWholesaleBrand: true, hasRetailBrand: true };
+  }
+
+  /**
+   * Imports one of the user's own wholesale products into their retail store.
+   * Pack-based products import in whole packs (total units = packs * pack size);
+   * non-pack products import as single units. The chosen retail price must be
+   * at least the per-unit cost.
+   */
+  async importFromWholesale(
+    userId: string,
+    dto: {
+      wholesaleProductId: string;
+      packSizeId?: string;
+      numberOfPacks?: number;
+      quantity?: number;
+      retailPrice: number;
+      name?: string;
+      salePercentage?: number;
+      compareAtPrice?: number;
+      status?: 'draft' | 'active';
+    },
+  ) {
+    const supabase = this.supabaseService.getServiceClient();
+
+    // Verify ownership of both marketplaces.
+    const [wholesaleBrandRes, retailBrandRes] = await Promise.all([
+      supabase
+        .from('wholesale_brands')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('status', 'approved')
+        .maybeSingle(),
+      supabase
+        .from('retail_brands')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('status', 'approved')
+        .maybeSingle(),
+    ]);
+
+    if (!wholesaleBrandRes.data) {
+      throw new BadRequestException(
+        'You need an approved wholesale brand to import wholesale products.',
+      );
+    }
+    if (!retailBrandRes.data) {
+      throw new BadRequestException(
+        'You need an approved retail store to import products into retail.',
+      );
+    }
+    const wholesaleBrandId = wholesaleBrandRes.data.id;
+    const retailBrandId = retailBrandRes.data.id;
+
+    // Load the source wholesale product and verify the user owns it.
+    const { data: product, error: productError } = await supabase
+      .from('wholesale_products')
+      .select('*')
+      .eq('id', dto.wholesaleProductId)
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    if (productError) {
+      throw new BadRequestException(
+        `Failed to load wholesale product: ${productError.message || 'Unknown error'}`,
+      );
+    }
+    if (!product) {
+      throw new NotFoundException('Wholesale product not found.');
+    }
+    if (product.wholesale_brand_id !== wholesaleBrandId) {
+      throw new BadRequestException(
+        'You can only import products from your own wholesale brand.',
+      );
+    }
+
+    // Block duplicate imports (one retail listing per source wholesale product).
+    const { data: existing } = await supabase
+      .from('retail_products')
+      .select('id, slug, name')
+      .eq('retail_brand_id', retailBrandId)
+      .eq('source_wholesale_product_id', product.id)
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    if (existing) {
+      throw new BadRequestException(
+        `"${product.name}" is already in your retail store. Edit the existing listing instead.`,
+      );
+    }
+
+    // Load pack sizes to decide pack-based vs single-unit import.
+    const { data: packSizes } = await supabase
+      .from('wholesale_product_pack_sizes')
+      .select('id, quantity, pack_price, unit_price')
+      .eq('product_id', product.id);
+
+    let unitCost: number;
+    let totalUnits: number;
+    let chosenPackSizeId: string | null = null;
+
+    if (packSizes && packSizes.length > 0) {
+      // Pack-based product: a pack must be chosen and imported in whole packs.
+      if (!dto.packSizeId) {
+        throw new BadRequestException(
+          'Please choose which pack to import for this product.',
+        );
+      }
+      const pack = packSizes.find((p) => p.id === dto.packSizeId);
+      if (!pack) {
+        throw new BadRequestException(
+          'The selected pack does not belong to this product.',
+        );
+      }
+      const packQuantity = Number(pack.quantity);
+      if (!packQuantity || packQuantity < 1) {
+        throw new BadRequestException('The selected pack has an invalid size.');
+      }
+      const numberOfPacks = dto.numberOfPacks ?? 1;
+      if (!Number.isInteger(numberOfPacks) || numberOfPacks < 1) {
+        throw new BadRequestException(
+          'Number of packs must be a whole number of at least 1.',
+        );
+      }
+      chosenPackSizeId = pack.id;
+      unitCost =
+        pack.unit_price != null
+          ? Number(pack.unit_price)
+          : Number(pack.pack_price) / packQuantity;
+      totalUnits = numberOfPacks * packQuantity;
+    } else {
+      // Non-pack product: import a chosen quantity of single units.
+      const quantity = dto.quantity ?? 1;
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        throw new BadRequestException(
+          'Quantity must be a whole number of at least 1.',
+        );
+      }
+      unitCost = Number(product.wholesale_price) || 0;
+      totalUnits = quantity;
+    }
+
+    // Enforce the price floor: never sell below unit cost.
+    if (dto.retailPrice == null || dto.retailPrice <= 0) {
+      throw new BadRequestException('Retail price must be greater than 0.');
+    }
+    if (dto.retailPrice < unitCost) {
+      throw new BadRequestException(
+        `Retail price (${dto.retailPrice}) cannot be less than the unit cost (${unitCost.toFixed(2)}).`,
+      );
+    }
+
+    if (dto.salePercentage != null) {
+      if (dto.salePercentage < 0 || dto.salePercentage > 100) {
+        throw new BadRequestException(
+          'Sale percentage must be between 0 and 100.',
+        );
+      }
+    }
+
+    // Build a unique slug within the retail brand (append entropy on clash,
+    // e.g. when a previously-imported listing was soft-deleted).
+    const baseSlug = product.slug || 'product';
+    let slug = baseSlug;
+    const { data: slugClash } = await supabase
+      .from('retail_products')
+      .select('id')
+      .eq('retail_brand_id', retailBrandId)
+      .eq('slug', slug)
+      .maybeSingle();
+    if (slugClash) {
+      slug = `${baseSlug}-${randomSuffix(6)}`;
+    }
+
+    // Generate a unique SKU (retail SKUs are globally unique).
+    const sku = `RTL-${randomSuffix(8).toUpperCase()}`;
+
+    const insertData: any = {
+      retail_brand_id: retailBrandId,
+      name: (dto.name && dto.name.trim()) || product.name,
+      slug,
+      sku,
+      description: product.description || null,
+      short_description: product.short_description || null,
+      category_id: product.category_id || null,
+      subcategory_id: product.subcategory_id || null,
+      cost_price: unitCost,
+      retail_price: dto.retailPrice,
+      compare_at_price:
+        dto.compareAtPrice ?? product.retail_price ?? null,
+      sale_percentage: dto.salePercentage ?? 0,
+      stock_quantity: totalUnits,
+      track_inventory: true,
+      source_wholesale_product_id: product.id,
+      source_wholesale_slug: product.slug,
+      is_auto_imported: false,
+      status: dto.status || 'draft',
+      meta_title: product.meta_title || null,
+      meta_description: product.meta_description || null,
+      product_details: product.product_details || null,
+    };
+
+    const { data: retailProduct, error: insertError } = await supabase
+      .from('retail_products')
+      .insert(insertData)
+      .select()
+      .single();
+
+    if (insertError) {
+      throw new BadRequestException(
+        `Failed to import product: ${insertError.message || 'Unknown error'}`,
+      );
+    }
+
+    // Copy images.
+    const { data: images } = await supabase
+      .from('wholesale_product_images')
+      .select('image_url, display_order, alt_text, is_primary')
+      .eq('product_id', product.id)
+      .order('display_order', { ascending: true });
+
+    if (images && images.length > 0) {
+      const imageRecords = images.map((img, index) => ({
+        product_id: retailProduct.id,
+        image_url: img.image_url,
+        display_order: img.display_order ?? index,
+        alt_text: img.alt_text || null,
+        is_primary: img.is_primary ?? index === 0,
+      }));
+      const { error: imagesError } = await supabase
+        .from('retail_product_images')
+        .insert(imageRecords);
+      if (imagesError) {
+        console.error('Failed to copy product images on import:', imagesError);
+      }
+    }
+
+    // Copy product-level variations, then the chosen pack's variations.
+    const variationRecords: any[] = [];
+    const seenVariations = new Set<string>();
+
+    const { data: productVariations } = await supabase
+      .from('wholesale_product_variations')
+      .select('variation_type, name, value, is_available, display_order')
+      .eq('product_id', product.id)
+      .order('display_order', { ascending: true });
+
+    (productVariations || []).forEach((v) => {
+      const key = `${v.variation_type}:${v.name}`;
+      if (seenVariations.has(key)) return;
+      seenVariations.add(key);
+      variationRecords.push({
+        product_id: retailProduct.id,
+        variation_type: v.variation_type,
+        name: v.name,
+        value: v.value || null,
+        is_available: v.is_available ?? true,
+        display_order: v.display_order ?? 0,
+      });
+    });
+
+    if (chosenPackSizeId) {
+      const { data: packVariations } = await supabase
+        .from('wholesale_pack_variations')
+        .select('variation_type, name, value, is_available, display_order')
+        .eq('pack_size_id', chosenPackSizeId)
+        .order('display_order', { ascending: true });
+
+      (packVariations || []).forEach((v) => {
+        const key = `${v.variation_type}:${v.name}`;
+        if (seenVariations.has(key)) return;
+        seenVariations.add(key);
+        variationRecords.push({
+          product_id: retailProduct.id,
+          variation_type: v.variation_type,
+          name: v.name,
+          value: v.value || null,
+          is_available: v.is_available ?? true,
+          display_order: v.display_order ?? 0,
+        });
+      });
+    }
+
+    if (variationRecords.length > 0) {
+      const { error: variationsError } = await supabase
+        .from('retail_product_variations')
+        .insert(variationRecords);
+      if (variationsError) {
+        console.error('Failed to copy variations on import:', variationsError);
+      }
+    }
+
+    // Distribute stock into retail_product_inventory by combination.
+    let combinationKeys: string[] = [];
+    if (chosenPackSizeId) {
+      const { data: stockMatrix } = await supabase
+        .from('wholesale_pack_stock_matrix')
+        .select('combination_key, stock_quantity')
+        .eq('pack_size_id', chosenPackSizeId)
+        .gt('stock_quantity', 0);
+      combinationKeys = [
+        ...new Set((stockMatrix || []).map((s) => s.combination_key)),
+      ];
+    }
+
+    const inventoryRecords =
+      combinationKeys.length > 0
+        ? combinationKeys.map((key) => ({
+            product_id: retailProduct.id,
+            combination_key: key,
+            stock_quantity: Math.floor(totalUnits / combinationKeys.length),
+            source_wholesale_order_item_id: null,
+          }))
+        : [
+            {
+              product_id: retailProduct.id,
+              combination_key: 'default',
+              stock_quantity: totalUnits,
+              source_wholesale_order_item_id: null,
+            },
+          ];
+
+    const { error: inventoryError } = await supabase
+      .from('retail_product_inventory')
+      .insert(inventoryRecords);
+    if (inventoryError) {
+      console.error('Failed to seed inventory on import:', inventoryError);
+    }
+
+    return this.getProductById(retailProduct.id, userId);
+  }
+}
+
+/**
+ * Short random alphanumeric suffix for building collision-resistant slugs/SKUs.
+ */
+function randomSuffix(length: number): string {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let out = '';
+  for (let i = 0; i < length; i++) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return out;
 }

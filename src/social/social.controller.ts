@@ -737,6 +737,41 @@ export class SocialController {
     return this.socialService.importRetailProduct(user.id, payload);
   }
 
+  // Catalog imports (ownership-based): the user's own wholesale / retail products.
+  @Get('products/importable-wholesale')
+  async getImportableWholesaleCatalog(
+    @Headers('authorization') authHeader?: string,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.getImportableWholesaleCatalog(user.id);
+  }
+
+  @Get('products/importable-retail-catalog')
+  async getImportableRetailCatalog(
+    @Headers('authorization') authHeader?: string,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.getImportableRetailCatalog(user.id);
+  }
+
+  @Post('products/import-wholesale')
+  async importWholesaleProduct(
+    @Headers('authorization') authHeader: string,
+    @Body() payload: any,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.importWholesaleProduct(user.id, payload);
+  }
+
+  @Post('products/import-retail-catalog')
+  async importRetailCatalogProduct(
+    @Headers('authorization') authHeader: string,
+    @Body() payload: any,
+  ) {
+    const user = await this.getRequiredUser(authHeader);
+    return this.socialService.importRetailCatalogProduct(user.id, payload);
+  }
+
   @Post('products')
   async createProduct(
     @Headers('authorization') authHeader: string,

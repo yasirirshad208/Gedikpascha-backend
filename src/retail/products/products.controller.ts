@@ -12,16 +12,25 @@ import {
   HttpCode,
   HttpStatus,
   UnauthorizedException,
+  BadRequestException,
   ParseIntPipe,
   DefaultValuePipe,
+  UsePipes,
+  ValidationPipe,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { RetailProductsService } from './products.service';
+import { RetailProductsUploadService } from './products-upload.service';
 import { SupabaseService } from '../../supabase/supabase.service';
+import { ImportFromWholesaleDto } from './dto/import-from-wholesale.dto';
 
 @Controller('retail-products')
 export class RetailProductsController {
   constructor(
     private readonly productsService: RetailProductsService,
+    private readonly productsUploadService: RetailProductsUploadService,
     private readonly supabaseService: SupabaseService,
   ) {}
 
@@ -101,6 +110,86 @@ export class RetailProductsController {
     );
   }
 
+  // List the user's own wholesale products available to import into retail.
+  @Get('importable-wholesale')
+  async getImportableWholesale(@Headers('authorization') authHeader?: string) {
+    const token = authHeader?.replace('Bearer ', '');
+    if (!token) {
+      throw new UnauthorizedException('Authentication required');
+    }
+
+    const supabase = this.supabaseService.getClient();
+    const { data: userData, error } = await supabase.auth.getUser(token);
+
+    if (error || !userData.user) {
+      throw new UnauthorizedException('Invalid or expired token');
+    }
+
+    return this.productsService.getImportableWholesaleProducts(
+      userData.user.id,
+    );
+  }
+
+  // Import one of the user's own wholesale products into their retail store.
+  @Post('import-wholesale')
+  @HttpCode(HttpStatus.CREATED)
+  @UsePipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      transformOptions: { enableImplicitConversion: true },
+    }),
+  )
+  async importFromWholesale(
+    @Body() dto: ImportFromWholesaleDto,
+    @Headers('authorization') authHeader?: string,
+  ) {
+    const token = authHeader?.replace('Bearer ', '');
+    if (!token) {
+      throw new UnauthorizedException('Authentication required');
+    }
+
+    const supabase = this.supabaseService.getClient();
+    const { data: userData, error } = await supabase.auth.getUser(token);
+
+    if (error || !userData.user) {
+      throw new UnauthorizedException('Invalid or expired token');
+    }
+
+    return this.productsService.importFromWholesale(userData.user.id, dto);
+  }
+
+  // Upload a retail product image; returns the public URL to attach via update.
+  @Post('upload-image')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(
+    FileInterceptor('image', {
+      limits: { fileSize: 50 * 1024 * 1024 },
+    }),
+  )
+  async uploadImage(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Headers('authorization') authHeader?: string,
+  ) {
+    const token = authHeader?.replace('Bearer ', '');
+    if (!token) {
+      throw new UnauthorizedException('Authentication required');
+    }
+    const supabase = this.supabaseService.getClient();
+    const { data: userData, error } = await supabase.auth.getUser(token);
+    if (error || !userData.user) {
+      throw new UnauthorizedException('Invalid or expired token');
+    }
+    if (!file) {
+      throw new BadRequestException('No file provided. Please select an image.');
+    }
+    const url = await this.productsUploadService.uploadImage(
+      userData.user.id,
+      file,
+    );
+    return { url };
+  }
+
   @Get('my-products/:id')
   async getProductById(
     @Param('id') productId: string,
@@ -145,14 +234,34 @@ export class RetailProductsController {
     @Body()
     updateData: {
       name?: string;
+      slug?: string;
+      sku?: string;
       description?: string;
       shortDescription?: string;
       retailPrice?: number;
+      compareAtPrice?: number | null;
       salePercentage?: number;
       status?: 'draft' | 'active' | 'inactive';
+      categoryId?: string | null;
+      subcategoryId?: string | null;
       metaTitle?: string;
       metaDescription?: string;
+      metaKeywords?: string;
       lowStockThreshold?: number;
+      productDetails?: Record<string, any> | null;
+      images?: Array<{
+        imageUrl: string;
+        displayOrder?: number;
+        altText?: string;
+        isPrimary?: boolean;
+      }>;
+      variations?: Array<{
+        variationType: string;
+        name: string;
+        value?: string;
+        isAvailable?: boolean;
+        displayOrder?: number;
+      }>;
     },
   ) {
     const token = authHeader?.replace('Bearer ', '');

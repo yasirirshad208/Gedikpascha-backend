@@ -2572,6 +2572,10 @@ export class SocialService {
         source_type: product.source_type,
         status: product.status,
         price: Number(product.price),
+        compare_at_price:
+          product.compare_at_price != null
+            ? Number(product.compare_at_price)
+            : null,
         currency: product.currency,
         quantity: product.quantity,
         available_quantity: product.available_quantity,
@@ -6740,8 +6744,27 @@ export class SocialService {
 
     const updateData: Record<string, unknown> = {};
     if (payload.title !== undefined) updateData.title = payload.title?.trim();
-    if (payload.slug !== undefined)
-      updateData.slug = this.slugifyText(payload.slug) || '';
+    if (payload.slug !== undefined) {
+      const nextSlug = this.slugifyText(payload.slug) || '';
+      if (!nextSlug) {
+        throw new BadRequestException('Slug cannot be empty');
+      }
+      if (nextSlug !== existing.slug) {
+        const { data: slugClash } = await this.serviceClient
+          .from('social_products')
+          .select('id')
+          .eq('seller_id', userId)
+          .eq('slug', nextSlug)
+          .neq('id', productId)
+          .maybeSingle();
+        if (slugClash) {
+          throw new BadRequestException(
+            'A product with this slug already exists in your catalog.',
+          );
+        }
+      }
+      updateData.slug = nextSlug;
+    }
     if (payload.description !== undefined)
       updateData.description = payload.description?.trim() ?? null;
     if (payload.brand !== undefined)
@@ -7103,6 +7126,514 @@ export class SocialService {
     }
 
     const full = await this.getProductById(createdProduct.id, userId);
+    return full?.product ?? null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Catalog imports (ownership-based): import the user's OWN wholesale / retail
+  // products into their social catalog. Distinct from importRetailProduct above,
+  // which imports delivered retail order items the user purchased.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Lists the user's own wholesale products (via their approved wholesale brand)
+   * that can be catalog-imported into social. Each item is flagged with whether
+   * it has already been imported.
+   */
+  async getImportableWholesaleCatalog(userId: string) {
+    const { data: wholesaleBrand } = await this.serviceClient
+      .from('wholesale_brands')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('status', 'approved')
+      .maybeSingle();
+
+    if (!wholesaleBrand) {
+      return { products: [], hasWholesaleBrand: false };
+    }
+
+    const { data: products, error } = await this.serviceClient
+      .from('wholesale_products')
+      .select('id, name, slug, wholesale_price, status, category_id')
+      .eq('wholesale_brand_id', wholesaleBrand.id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      throw new BadRequestException(
+        `Failed to load wholesale products: ${error.message}`,
+      );
+    }
+
+    const productIds = (products || []).map((p) => p.id);
+    if (productIds.length === 0) {
+      return { products: [], hasWholesaleBrand: true };
+    }
+
+    const [packsRes, imagesRes, importedRes] = await Promise.all([
+      this.serviceClient
+        .from('wholesale_product_pack_sizes')
+        .select('id, product_id, label, quantity, pack_price, unit_price')
+        .in('product_id', productIds)
+        .order('display_order', { ascending: true }),
+      this.serviceClient
+        .from('wholesale_product_images')
+        .select('product_id, image_url, is_primary, display_order')
+        .in('product_id', productIds)
+        .order('display_order', { ascending: true }),
+      this.serviceClient
+        .from('social_products')
+        .select('id, slug, source_wholesale_product_id')
+        .eq('seller_id', userId)
+        .in('source_wholesale_product_id', productIds),
+    ]);
+
+    const packsByProduct = new Map<string, any[]>();
+    (packsRes.data || []).forEach((pack) => {
+      const list = packsByProduct.get(pack.product_id) || [];
+      list.push({
+        id: pack.id,
+        label: pack.label,
+        quantity: pack.quantity,
+        packPrice: pack.pack_price,
+        unitPrice:
+          pack.unit_price ??
+          (pack.quantity ? Number(pack.pack_price) / pack.quantity : null),
+      });
+      packsByProduct.set(pack.product_id, list);
+    });
+
+    const imageByProduct = new Map<string, string>();
+    (imagesRes.data || []).forEach((img) => {
+      if (!imageByProduct.has(img.product_id) || img.is_primary) {
+        imageByProduct.set(img.product_id, img.image_url);
+      }
+    });
+
+    const importedByProduct = new Map<string, { id: string; slug: string }>();
+    (importedRes.data || []).forEach((sp) => {
+      if (sp.source_wholesale_product_id) {
+        importedByProduct.set(sp.source_wholesale_product_id, {
+          id: sp.id,
+          slug: sp.slug,
+        });
+      }
+    });
+
+    const result = (products || []).map((p) => {
+      const packs = packsByProduct.get(p.id) || [];
+      const imported = importedByProduct.get(p.id) || null;
+      return {
+        id: p.id,
+        name: p.name,
+        slug: p.slug,
+        wholesalePrice: p.wholesale_price,
+        status: p.status,
+        hasCategory: !!p.category_id,
+        primaryImage: imageByProduct.get(p.id) || null,
+        packSizes: packs,
+        hasPacks: packs.length > 0,
+        alreadyImported: !!imported,
+        importedSocialProduct: imported,
+      };
+    });
+
+    return { products: result, hasWholesaleBrand: true };
+  }
+
+  /**
+   * Lists the user's own retail products (via their approved retail brand) that
+   * can be catalog-imported into social.
+   */
+  async getImportableRetailCatalog(userId: string) {
+    const { data: retailBrand } = await this.serviceClient
+      .from('retail_brands')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('status', 'approved')
+      .maybeSingle();
+
+    if (!retailBrand) {
+      return { products: [], hasRetailBrand: false };
+    }
+
+    const { data: products, error } = await this.serviceClient
+      .from('retail_products')
+      .select(
+        'id, name, slug, cost_price, retail_price, stock_quantity, status, category_id',
+      )
+      .eq('retail_brand_id', retailBrand.id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      throw new BadRequestException(
+        `Failed to load retail products: ${error.message}`,
+      );
+    }
+
+    const productIds = (products || []).map((p) => p.id);
+    if (productIds.length === 0) {
+      return { products: [], hasRetailBrand: true };
+    }
+
+    const [imagesRes, importedRes] = await Promise.all([
+      this.serviceClient
+        .from('retail_product_images')
+        .select('product_id, image_url, is_primary, display_order')
+        .in('product_id', productIds)
+        .order('display_order', { ascending: true }),
+      this.serviceClient
+        .from('social_products')
+        .select('id, slug, source_retail_product_id')
+        .eq('seller_id', userId)
+        .in('source_retail_product_id', productIds),
+    ]);
+
+    const imageByProduct = new Map<string, string>();
+    (imagesRes.data || []).forEach((img) => {
+      if (!imageByProduct.has(img.product_id) || img.is_primary) {
+        imageByProduct.set(img.product_id, img.image_url);
+      }
+    });
+
+    const importedByProduct = new Map<string, { id: string; slug: string }>();
+    (importedRes.data || []).forEach((sp) => {
+      if (sp.source_retail_product_id) {
+        importedByProduct.set(sp.source_retail_product_id, {
+          id: sp.id,
+          slug: sp.slug,
+        });
+      }
+    });
+
+    const result = (products || []).map((p) => {
+      const imported = importedByProduct.get(p.id) || null;
+      return {
+        id: p.id,
+        name: p.name,
+        slug: p.slug,
+        costPrice: p.cost_price,
+        retailPrice: p.retail_price,
+        stockQuantity: p.stock_quantity,
+        status: p.status,
+        hasCategory: !!p.category_id,
+        primaryImage: imageByProduct.get(p.id) || null,
+        alreadyImported: !!imported,
+        importedSocialProduct: imported,
+      };
+    });
+
+    return { products: result, hasRetailBrand: true };
+  }
+
+  /**
+   * Builds a slug unique to this seller (social_products has UNIQUE(seller_id, slug)).
+   */
+  private async buildUniqueSocialSlug(
+    userId: string,
+    base: string,
+  ): Promise<string> {
+    const slug = this.resolveProductSlug(undefined, base);
+    const { data: clash } = await this.serviceClient
+      .from('social_products')
+      .select('id')
+      .eq('seller_id', userId)
+      .eq('slug', slug)
+      .maybeSingle();
+    if (!clash) return slug;
+    const suffix = Math.random().toString(36).slice(2, 8);
+    return `${slug}-${suffix}`;
+  }
+
+  private async copyImagesToSocialMedia(
+    socialProductId: string,
+    images: Array<{
+      image_url: string;
+      display_order?: number | null;
+      is_primary?: boolean | null;
+    }>,
+  ) {
+    if (!images || images.length === 0) return;
+    const rows = images.map((img, index) => ({
+      product_id: socialProductId,
+      media_url: img.image_url,
+      media_type: 'image',
+      display_order: img.display_order ?? index,
+      is_primary: img.is_primary ?? index === 0,
+    }));
+    const { error } = await this.serviceClient
+      .from('social_product_media')
+      .insert(rows);
+    if (error) {
+      console.error('Failed to copy media on catalog import:', error);
+    }
+  }
+
+  /**
+   * Imports one of the user's own wholesale products into their social catalog.
+   * Pack-based products import in whole packs (quantity = packs * pack size);
+   * non-pack products import a chosen quantity. The chosen price must be at
+   * least the per-unit cost.
+   */
+  async importWholesaleProduct(userId: string, payload: any) {
+    await this.ensureSocialProfile(userId);
+
+    const { data: wholesaleBrand } = await this.serviceClient
+      .from('wholesale_brands')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('status', 'approved')
+      .maybeSingle();
+    if (!wholesaleBrand) {
+      throw new BadRequestException(
+        'You need an approved wholesale brand to import wholesale products.',
+      );
+    }
+
+    const wholesaleProductId = payload?.wholesaleProductId;
+    if (!wholesaleProductId) {
+      throw new BadRequestException('wholesaleProductId is required');
+    }
+
+    const { data: product, error: productError } = await this.serviceClient
+      .from('wholesale_products')
+      .select('*')
+      .eq('id', wholesaleProductId)
+      .is('deleted_at', null)
+      .maybeSingle();
+    if (productError) throw new BadRequestException(productError.message);
+    if (!product) throw new NotFoundException('Wholesale product not found.');
+    if (product.wholesale_brand_id !== wholesaleBrand.id) {
+      throw new BadRequestException(
+        'You can only import products from your own wholesale brand.',
+      );
+    }
+    if (!product.category_id) {
+      throw new BadRequestException(
+        'This wholesale product has no category and cannot be imported.',
+      );
+    }
+
+    // Block duplicate imports.
+    const { data: existing } = await this.serviceClient
+      .from('social_products')
+      .select('id')
+      .eq('seller_id', userId)
+      .eq('source_wholesale_product_id', product.id)
+      .maybeSingle();
+    if (existing) {
+      throw new BadRequestException(
+        `"${product.name}" is already in your social catalog. Edit the existing listing instead.`,
+      );
+    }
+
+    // Resolve pack vs single-unit and unit cost.
+    const { data: packSizes } = await this.serviceClient
+      .from('wholesale_product_pack_sizes')
+      .select('id, quantity, pack_price, unit_price')
+      .eq('product_id', product.id);
+
+    let unitCost: number;
+    let quantity: number;
+    if (packSizes && packSizes.length > 0) {
+      const pack = packSizes.find((p) => p.id === payload?.packSizeId);
+      if (!pack) {
+        throw new BadRequestException(
+          'Please choose which pack to import for this product.',
+        );
+      }
+      const packQuantity = Number(pack.quantity);
+      if (!packQuantity || packQuantity < 1) {
+        throw new BadRequestException('The selected pack has an invalid size.');
+      }
+      const numberOfPacks = Math.floor(Number(payload?.numberOfPacks ?? 1));
+      if (!Number.isInteger(numberOfPacks) || numberOfPacks < 1) {
+        throw new BadRequestException(
+          'Number of packs must be a whole number of at least 1.',
+        );
+      }
+      unitCost =
+        pack.unit_price != null
+          ? Number(pack.unit_price)
+          : Number(pack.pack_price) / packQuantity;
+      quantity = numberOfPacks * packQuantity;
+    } else {
+      const qty = Math.floor(Number(payload?.quantity ?? 1));
+      if (!Number.isInteger(qty) || qty < 1) {
+        throw new BadRequestException(
+          'Quantity must be a whole number of at least 1.',
+        );
+      }
+      unitCost = Number(product.wholesale_price) || 0;
+      quantity = qty;
+    }
+
+    const price = Number(payload?.price);
+    if (payload?.price === undefined || payload?.price === null || isNaN(price) || price <= 0) {
+      throw new BadRequestException('Price must be greater than 0.');
+    }
+    if (price < unitCost) {
+      throw new BadRequestException(
+        `Price (${price}) cannot be less than the unit cost (${unitCost.toFixed(2)}).`,
+      );
+    }
+
+    const slug = await this.buildUniqueSocialSlug(userId, product.name);
+
+    const { data: created, error: createError } = await this.serviceClient
+      .from('social_products')
+      .insert({
+        seller_id: userId,
+        title: (payload?.title && String(payload.title).trim()) || product.name,
+        slug,
+        description: product.description ?? null,
+        condition: payload?.condition ?? 'new',
+        category_id: product.category_id,
+        subcategory_id: product.subcategory_id ?? null,
+        listing_type: payload?.listingType ?? 'shop',
+        source_type: 'wholesale_catalog_import',
+        source_wholesale_product_id: product.id,
+        status: 'draft',
+        price,
+        compare_at_price: product.retail_price ?? null,
+        quantity,
+        available_quantity: quantity,
+        is_exchangeable: payload?.isExchangeable ?? true,
+        allow_offers: payload?.allowOffers ?? true,
+      })
+      .select('*')
+      .single();
+    if (createError || !created) {
+      throw new BadRequestException(
+        `Failed to import product: ${createError?.message ?? 'Unknown error'}`,
+      );
+    }
+
+    const { data: images } = await this.serviceClient
+      .from('wholesale_product_images')
+      .select('image_url, display_order, is_primary')
+      .eq('product_id', product.id)
+      .order('display_order', { ascending: true });
+    await this.copyImagesToSocialMedia(created.id, images || []);
+
+    const full = await this.getProductById(created.id, userId);
+    return full?.product ?? null;
+  }
+
+  /**
+   * Imports one of the user's own retail products into their social catalog.
+   * Retail products sell as single units; the user picks how many to list and
+   * the price (which must be at least the retail cost price).
+   */
+  async importRetailCatalogProduct(userId: string, payload: any) {
+    await this.ensureSocialProfile(userId);
+
+    const { data: retailBrand } = await this.serviceClient
+      .from('retail_brands')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('status', 'approved')
+      .maybeSingle();
+    if (!retailBrand) {
+      throw new BadRequestException(
+        'You need an approved retail store to import retail products.',
+      );
+    }
+
+    const retailProductId = payload?.retailProductId;
+    if (!retailProductId) {
+      throw new BadRequestException('retailProductId is required');
+    }
+
+    const { data: product, error: productError } = await this.serviceClient
+      .from('retail_products')
+      .select('*')
+      .eq('id', retailProductId)
+      .is('deleted_at', null)
+      .maybeSingle();
+    if (productError) throw new BadRequestException(productError.message);
+    if (!product) throw new NotFoundException('Retail product not found.');
+    if (product.retail_brand_id !== retailBrand.id) {
+      throw new BadRequestException(
+        'You can only import products from your own retail store.',
+      );
+    }
+    if (!product.category_id) {
+      throw new BadRequestException(
+        'This retail product has no category and cannot be imported.',
+      );
+    }
+
+    const { data: existing } = await this.serviceClient
+      .from('social_products')
+      .select('id')
+      .eq('seller_id', userId)
+      .eq('source_retail_product_id', product.id)
+      .maybeSingle();
+    if (existing) {
+      throw new BadRequestException(
+        `"${product.name}" is already in your social catalog. Edit the existing listing instead.`,
+      );
+    }
+
+    const quantity = Math.floor(Number(payload?.quantity ?? 1));
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      throw new BadRequestException(
+        'Quantity must be a whole number of at least 1.',
+      );
+    }
+
+    const unitCost = Number(product.cost_price) || 0;
+    const price = Number(payload?.price);
+    if (payload?.price === undefined || payload?.price === null || isNaN(price) || price <= 0) {
+      throw new BadRequestException('Price must be greater than 0.');
+    }
+    if (price < unitCost) {
+      throw new BadRequestException(
+        `Price (${price}) cannot be less than the unit cost (${unitCost.toFixed(2)}).`,
+      );
+    }
+
+    const slug = await this.buildUniqueSocialSlug(userId, product.name);
+
+    const { data: created, error: createError } = await this.serviceClient
+      .from('social_products')
+      .insert({
+        seller_id: userId,
+        title: (payload?.title && String(payload.title).trim()) || product.name,
+        slug,
+        description: product.description ?? null,
+        condition: payload?.condition ?? 'new',
+        category_id: product.category_id,
+        subcategory_id: product.subcategory_id ?? null,
+        listing_type: payload?.listingType ?? 'shop',
+        source_type: 'retail_catalog_import',
+        source_retail_product_id: product.id,
+        status: 'draft',
+        price,
+        compare_at_price: product.compare_at_price ?? product.retail_price ?? null,
+        quantity,
+        available_quantity: quantity,
+        is_exchangeable: payload?.isExchangeable ?? true,
+        allow_offers: payload?.allowOffers ?? true,
+      })
+      .select('*')
+      .single();
+    if (createError || !created) {
+      throw new BadRequestException(
+        `Failed to import product: ${createError?.message ?? 'Unknown error'}`,
+      );
+    }
+
+    const { data: images } = await this.serviceClient
+      .from('retail_product_images')
+      .select('image_url, display_order, is_primary')
+      .eq('product_id', product.id)
+      .order('display_order', { ascending: true });
+    await this.copyImagesToSocialMedia(created.id, images || []);
+
+    const full = await this.getProductById(created.id, userId);
     return full?.product ?? null;
   }
 
