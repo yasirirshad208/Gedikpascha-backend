@@ -6684,7 +6684,7 @@ export class SocialService {
         status: payload.status === 'active' ? 'active' : 'draft',
         price: Number(payload.price),
         compare_at_price: payload.compareAtPrice ?? null,
-        currency: payload.currency ?? 'USD',
+        currency: payload.currency ?? 'TRY',
         quantity,
         available_quantity: quantity,
         is_exchangeable: payload.isExchangeable ?? true,
@@ -6787,7 +6787,7 @@ export class SocialService {
     if (payload.compareAtPrice !== undefined)
       updateData.compare_at_price = payload.compareAtPrice;
     if (payload.currency !== undefined)
-      updateData.currency = payload.currency ?? 'USD';
+      updateData.currency = payload.currency ?? 'TRY';
     if (payload.quantity !== undefined)
       updateData.quantity = Math.max(0, Math.floor(Number(payload.quantity)));
     if (payload.isExchangeable !== undefined)
@@ -7494,7 +7494,9 @@ export class SocialService {
         listing_type: payload?.listingType ?? 'shop',
         source_type: 'wholesale_catalog_import',
         source_wholesale_product_id: product.id,
-        status: 'draft',
+        status: 'active',
+        published_at: new Date().toISOString(),
+        currency: 'TRY',
         price,
         compare_at_price: product.retail_price ?? null,
         quantity,
@@ -7517,8 +7519,94 @@ export class SocialService {
       .order('display_order', { ascending: true });
     await this.copyImagesToSocialMedia(created.id, images || []);
 
+    // Copy size/colour variations so buyers can pick a size on the product page.
+    const sizes: string[] = [];
+    const colors: Array<{ label: string; value: string }> = [];
+    if (payload?.packSizeId) {
+      const { data: packVars } = await this.serviceClient
+        .from('wholesale_pack_variations')
+        .select('color, color_value, size, variation_type, name, value')
+        .eq('pack_size_id', payload.packSizeId);
+      (packVars || []).forEach((v: any) => {
+        if (v.size) sizes.push(v.size);
+        else if (v.variation_type === 'size' && v.name) sizes.push(v.name);
+        if (v.color) colors.push({ label: v.color, value: v.color_value || '#000000' });
+        else if (v.variation_type === 'color' && v.name)
+          colors.push({ label: v.name, value: v.value || '#000000' });
+      });
+    }
+    const { data: prodVars } = await this.serviceClient
+      .from('wholesale_product_variations')
+      .select('variation_type, name, value')
+      .eq('product_id', product.id);
+    (prodVars || []).forEach((v: any) => {
+      if (v.variation_type === 'size' && v.name) sizes.push(v.name);
+      if (v.variation_type === 'color' && v.name)
+        colors.push({ label: v.name, value: v.value || '#000000' });
+    });
+    await this.insertSocialSizeColorVariations(created.id, sizes, colors);
+
     const full = await this.getProductById(created.id, userId);
     return full?.product ?? null;
+  }
+
+  /**
+   * Inserts "Size" (text) and "Colour" (color) variation rows on an imported
+   * social product so the buyer gets a size/colour selector on the product page.
+   */
+  private async insertSocialSizeColorVariations(
+    socialProductId: string,
+    sizes: string[],
+    colors: Array<{ label: string; value: string }>,
+  ) {
+    const rows: any[] = [];
+    let order = 0;
+
+    const uniqueSizes = [
+      ...new Set(sizes.map((s) => String(s).trim()).filter(Boolean)),
+    ];
+    if (uniqueSizes.length) {
+      rows.push({
+        product_id: socialProductId,
+        variation_name: 'Size',
+        variation_type: 'text',
+        variation_values: uniqueSizes,
+        variation_options: uniqueSizes.map((v) => ({ label: v, value: v })),
+        display_order: order++,
+      });
+    }
+
+    const colorMap = new Map<string, string>();
+    colors.forEach((c) => {
+      const label = String(c.label ?? '').trim();
+      if (!label || colorMap.has(label)) return;
+      const value = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c.value || '')
+        ? c.value.toLowerCase()
+        : '#000000';
+      colorMap.set(label, value);
+    });
+    if (colorMap.size) {
+      rows.push({
+        product_id: socialProductId,
+        variation_name: 'Color',
+        variation_type: 'color',
+        variation_values: [...colorMap.values()],
+        variation_options: [...colorMap.entries()].map(([label, value]) => ({
+          label,
+          value,
+        })),
+        display_order: order++,
+      });
+    }
+
+    if (rows.length) {
+      const { error } = await this.serviceClient
+        .from('social_product_variations')
+        .insert(rows);
+      if (error) {
+        console.error('Failed to copy variations on import:', error);
+      }
+    }
   }
 
   /**
@@ -7610,7 +7698,9 @@ export class SocialService {
         listing_type: payload?.listingType ?? 'shop',
         source_type: 'retail_catalog_import',
         source_retail_product_id: product.id,
-        status: 'draft',
+        status: 'active',
+        published_at: new Date().toISOString(),
+        currency: 'TRY',
         price,
         compare_at_price: product.compare_at_price ?? product.retail_price ?? null,
         quantity,
@@ -7632,6 +7722,21 @@ export class SocialService {
       .eq('product_id', product.id)
       .order('display_order', { ascending: true });
     await this.copyImagesToSocialMedia(created.id, images || []);
+
+    // Copy size/colour variations from the retail product so buyers can pick a size.
+    const sizes: string[] = [];
+    const colors: Array<{ label: string; value: string }> = [];
+    const { data: retailVars } = await this.serviceClient
+      .from('retail_product_variations')
+      .select('variation_type, name, value')
+      .eq('product_id', product.id);
+    (retailVars || []).forEach((v: any) => {
+      const type = String(v.variation_type || '').toLowerCase();
+      if (type === 'size' && v.name) sizes.push(v.name);
+      else if (type === 'color' && v.name)
+        colors.push({ label: v.name, value: v.value || '#000000' });
+    });
+    await this.insertSocialSizeColorVariations(created.id, sizes, colors);
 
     const full = await this.getProductById(created.id, userId);
     return full?.product ?? null;
@@ -12487,7 +12592,7 @@ export class SocialService {
         subtotal,
         shipping_cost: shippingCost,
         total_amount: totalAmount,
-        currency: 'USD',
+        currency: 'TRY',
         shipping_address: payload?.shippingAddress ?? null,
         notes: payload?.notes ?? null,
       })
