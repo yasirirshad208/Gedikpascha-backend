@@ -1,7 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { randomUUID } from 'crypto';
-import { extname } from 'path';
-import { SupabaseService } from '../supabase/supabase.service';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
 
 type SocialUploadKind =
   | 'post_image'
@@ -43,7 +41,7 @@ export class SocialUploadService {
     'video/x-matroska',
   ]);
 
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly cloudinary: CloudinaryService) {}
 
   private normalizeKind(kind: string | undefined): SocialUploadKind {
     const normalized = String(kind || '')
@@ -61,29 +59,6 @@ export class SocialUploadService {
       throw new BadRequestException('Invalid upload kind');
     }
     return normalized;
-  }
-
-  private fallbackExtFromMime(mimeType: string): string {
-    const map: Record<string, string> = {
-      'image/jpeg': '.jpg',
-      'image/jpg': '.jpg',
-      'image/png': '.png',
-      'image/webp': '.webp',
-      'image/avif': '.avif',
-      'image/gif': '.gif',
-      'video/mp4': '.mp4',
-      'video/webm': '.webm',
-      'video/quicktime': '.mov',
-      'video/ogg': '.ogv',
-      'video/x-matroska': '.mkv',
-    };
-    return map[mimeType] ?? '';
-  }
-
-  private resolveExtension(file: Express.Multer.File): string {
-    const fromName = extname(file.originalname || '').toLowerCase();
-    if (fromName) return fromName;
-    return this.fallbackExtFromMime(file.mimetype || '') || '.bin';
   }
 
   private validateFile(kind: SocialUploadKind, file: Express.Multer.File) {
@@ -191,33 +166,17 @@ export class SocialUploadService {
     const kind = this.normalizeKind(kindValue);
     this.validateFile(kind, file);
 
-    const extension = this.resolveExtension(file);
-    const datePart = new Date().toISOString().slice(0, 10);
-    const filePath = `${userId}/${kind}/${datePart}/${Date.now()}-${randomUUID()}${extension}`;
-
-    const serviceClient = this.supabaseService.getServiceClient();
-    const { error: uploadError } = await serviceClient.storage
-      .from(this.bucketName)
-      .upload(filePath, file.buffer, {
-        contentType: file.mimetype,
-        upsert: false,
-      });
-
-    if (uploadError) {
-      throw new BadRequestException(
-        `Failed to upload media: ${uploadError.message}`,
-      );
-    }
-
-    const { data: publicUrlData } = serviceClient.storage
-      .from(this.bucketName)
-      .getPublicUrl(filePath);
+    const isVideo = this.allowedVideoMimeTypes.has(file.mimetype);
+    const result = await this.cloudinary.uploadBuffer(file.buffer, {
+      folder: this.cloudinary.folder(`social/${kind}/${userId}`),
+      resourceType: isVideo ? 'video' : 'image',
+    });
 
     return {
       kind,
       bucket: this.bucketName,
-      path: filePath,
-      url: publicUrlData.publicUrl,
+      path: result.publicId,
+      url: result.url,
       mimeType: file.mimetype,
       size: file.size,
     };

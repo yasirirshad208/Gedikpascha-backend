@@ -1,9 +1,9 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
-import { SupabaseService } from '../../supabase/supabase.service';
+import { CloudinaryService } from '../../cloudinary/cloudinary.service';
 
 @Injectable()
 export class BrandsUploadService {
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(private readonly cloudinary: CloudinaryService) {}
 
   async uploadImage(
     userId: string,
@@ -13,66 +13,24 @@ export class BrandsUploadService {
     if (!file) {
       throw new BadRequestException('No file provided');
     }
-
-    // Validate file type
     if (!file.mimetype.startsWith('image/')) {
       throw new BadRequestException('File must be an image');
     }
-
-    // Validate file size (50MB max)
     const maxSize = 50 * 1024 * 1024; // 50MB
     if (file.size > maxSize) {
       throw new BadRequestException('File size must be less than 50MB');
     }
 
-    // Get file extension
-    const fileExt = file.originalname.split('.').pop() || 'jpg';
-    const fileName = `${imageType}-${Date.now()}.${fileExt}`;
-    const filePath = `${userId}/${fileName}`;
-
-    // Upload to Supabase storage
-    const serviceClient = this.supabaseService.getServiceClient();
-    const { data, error } = await serviceClient.storage
-      .from('wholesale')
-      .upload(filePath, file.buffer, {
-        contentType: file.mimetype,
-        upsert: false, // Don't overwrite existing files
-      });
-
-    if (error) {
-      throw new BadRequestException(`Failed to upload image: ${error.message}`);
-    }
-
-    // Get public URL
-    const { data: urlData } = serviceClient.storage
-      .from('wholesale')
-      .getPublicUrl(filePath);
-
-    return urlData.publicUrl;
+    const result = await this.cloudinary.uploadBuffer(file.buffer, {
+      folder: this.cloudinary.folder(`wholesale/brands/${userId}`),
+      resourceType: 'image',
+      // Covers can be wide; keep a generous cap so they stay crisp.
+      maxWidth: imageType === 'cover' ? 2000 : 800,
+    });
+    return result.url;
   }
 
   async deleteImage(imageUrl: string): Promise<void> {
-    if (!imageUrl) {
-      return;
-    }
-
-    // Extract file path from URL
-    // URL format: https://[project].supabase.co/storage/v1/object/public/wholesale/[userId]/[fileName]
-    const urlParts = imageUrl.split('/wholesale/');
-    if (urlParts.length < 2) {
-      return; // Invalid URL format, skip deletion
-    }
-
-    const filePath = urlParts[1];
-
-    const serviceClient = this.supabaseService.getServiceClient();
-    const { error } = await serviceClient.storage
-      .from('wholesale')
-      .remove([filePath]);
-
-    if (error) {
-      console.error('Failed to delete image:', error);
-      // Don't throw error for deletion failures, just log
-    }
+    await this.cloudinary.deleteByUrl(imageUrl);
   }
 }

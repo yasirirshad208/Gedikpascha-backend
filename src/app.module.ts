@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { SupabaseModule } from './supabase/supabase.module';
+import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { AuthModule } from './auth/auth.module';
 import { BrandsModule } from './wholesale/brands/brands.module';
 import { ProductsModule } from './wholesale/products/products.module';
@@ -24,6 +25,7 @@ import { PaymentsModule } from './payments/payments.module';
 @Module({
   imports: [
     SupabaseModule,
+    CloudinaryModule,
     AuthModule,
     BrandsModule,
     ProductsModule,
