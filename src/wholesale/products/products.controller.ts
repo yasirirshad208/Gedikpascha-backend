@@ -149,11 +149,23 @@ export class ProductsController {
       );
     }
 
-    return (data || []).map((cat: any) => ({
-      id: cat.id,
-      name: cat.name,
-      slug: cat.slug,
-    }));
+    // Show only categories that currently have visible wholesale products.
+    const { data: activeRows } = await serviceClient
+      .from('active_wholesale_products')
+      .select('category_id');
+    const categoryIdsWithProducts = new Set(
+      (activeRows || [])
+        .map((row: any) => row.category_id)
+        .filter(Boolean),
+    );
+
+    return (data || [])
+      .filter((cat: any) => categoryIdsWithProducts.has(cat.id))
+      .map((cat: any) => ({
+        id: cat.id,
+        name: cat.name,
+        slug: cat.slug,
+      }));
   }
 
   @Get('subcategories')

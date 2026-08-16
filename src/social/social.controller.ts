@@ -613,8 +613,11 @@ export class SocialController {
   }
 
   @Get('taxonomy')
-  async getTaxonomy() {
-    return this.socialService.getTaxonomy();
+  async getTaxonomy(@Query('withProducts') withProducts?: string) {
+    // Shop/closet filters pass withProducts=1 to hide empty categories;
+    // create/edit forms omit it so sellers see all active categories.
+    const withProductsOnly = withProducts === '1' || withProducts === 'true';
+    return this.socialService.getTaxonomy(withProductsOnly);
   }
 
   @Post('uploads/media')

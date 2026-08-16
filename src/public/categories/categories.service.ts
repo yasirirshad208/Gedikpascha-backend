@@ -5,6 +5,38 @@ import { SupabaseService } from '../../supabase/supabase.service';
 export class PublicCategoriesService {
   constructor(private readonly supabaseService: SupabaseService) {}
 
+  /**
+   * Returns the set of category IDs that currently have at least one publicly
+   * visible (active) product in ANY of the three marketplaces (wholesale,
+   * retail, social). Used to hide empty categories from shopper-facing menus
+   * without touching `is_active` (so sellers can still list into them).
+   */
+  private async getCategoryIdsWithActiveProducts(): Promise<Set<string>> {
+    const serviceClient = this.supabaseService.getServiceClient();
+    const ids = new Set<string>();
+
+    const [wholesale, retail, social] = await Promise.all([
+      serviceClient.from('active_wholesale_products').select('category_id'),
+      serviceClient
+        .from('retail_products')
+        .select('category_id')
+        .eq('status', 'active')
+        .is('deleted_at', null),
+      serviceClient
+        .from('social_products')
+        .select('category_id')
+        .eq('status', 'active'),
+    ]);
+
+    [wholesale.data, retail.data, social.data].forEach((rows) => {
+      (rows || []).forEach((row: any) => {
+        if (row.category_id) ids.add(row.category_id);
+      });
+    });
+
+    return ids;
+  }
+
   async getAllCategoriesWithSubcategories() {
     const serviceClient = this.supabaseService.getServiceClient();
 
@@ -21,6 +53,12 @@ export class PublicCategoriesService {
         `Failed to fetch categories: ${catError.message}`,
       );
     }
+
+    // Keep only categories that currently have products (in any section).
+    const categoryIdsWithProducts = await this.getCategoryIdsWithActiveProducts();
+    const visibleCategories = (categories || []).filter((cat: any) =>
+      categoryIdsWithProducts.has(cat.id),
+    );
 
     // Fetch all active subcategories
     const { data: subcategories, error: subError } = await serviceClient
@@ -53,7 +91,7 @@ export class PublicCategoriesService {
     });
 
     // Build response with nested subcategories
-    return (categories || []).map((cat: any) => ({
+    return visibleCategories.map((cat: any) => ({
       id: cat.id,
       name: cat.name,
       slug: cat.slug,

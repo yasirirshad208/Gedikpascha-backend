@@ -13073,7 +13073,7 @@ export class SocialService {
     return applyTaxonomyAwareAdjustments(normalizedRows);
   }
 
-  async getTaxonomy() {
+  async getTaxonomy(withProductsOnly = false) {
     const [categoriesResult, subcategoriesResult, subSubcategoriesResult] =
       await Promise.all([
         this.serviceClient
@@ -13119,7 +13119,27 @@ export class SocialService {
       });
     }
 
-    return (categoriesResult.data ?? []).map((category) => ({
+    let categories = categoriesResult.data ?? [];
+
+    // Shopper-facing shop/closet filters pass withProductsOnly=true so empty
+    // categories are hidden. The create/edit product forms call without it, so
+    // sellers still see every active category.
+    if (withProductsOnly) {
+      const { data: activeRows } = await this.serviceClient
+        .from('social_products')
+        .select('category_id')
+        .eq('status', 'active');
+      const categoryIdsWithProducts = new Set(
+        (activeRows ?? [])
+          .map((row: any) => row.category_id)
+          .filter(Boolean),
+      );
+      categories = categories.filter((category: any) =>
+        categoryIdsWithProducts.has(category.id),
+      );
+    }
+
+    return categories.map((category) => ({
       ...category,
       subcategories: subMap.get(category.id) ?? [],
     }));
