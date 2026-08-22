@@ -5,6 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
+import { cached, TTL, clearCache } from '../../common/cache.util';
 
 interface CreateReviewDto {
   productId: string;
@@ -117,6 +118,9 @@ export class ReviewsService {
       .eq('id', userId)
       .single();
 
+    // Fresh review changes the product's review list/stats — drop its cache.
+    clearCache(`reviews:${dto.productId}:`);
+
     return {
       id: review.id,
       productId: review.product_id,
@@ -139,6 +143,7 @@ export class ReviewsService {
    * Get reviews for a product with pagination
    */
   async getProductReviews(productId: string, page = 1, limit = 10) {
+   return cached(`reviews:${productId}:${page}:${limit}`, TTL.medium, async () => {
     const serviceClient = this.supabaseService.getServiceClient();
     const offset = (page - 1) * limit;
 
@@ -238,6 +243,7 @@ export class ReviewsService {
         totalPages: Math.ceil((count || 0) / limit),
       },
     };
+   });
   }
 
   /**

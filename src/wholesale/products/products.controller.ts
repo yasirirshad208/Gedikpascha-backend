@@ -25,6 +25,7 @@ import { ProductsUploadService } from './products-upload.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { SupabaseService } from '../../supabase/supabase.service';
+import { cached, TTL } from '../../common/cache.util';
 
 @Controller('wholesale-products')
 export class ProductsController {
@@ -133,6 +134,7 @@ export class ProductsController {
 
   @Get('categories')
   async getCategories() {
+   return cached('wholesale:ctl:categories', TTL.medium, async () => {
     // Public endpoint - no auth required
     const serviceClient = this.supabaseService.getServiceClient();
 
@@ -166,10 +168,12 @@ export class ProductsController {
         name: cat.name,
         slug: cat.slug,
       }));
+   });
   }
 
   @Get('subcategories')
   async getSubcategories(@Query('categoryId') categoryId?: string) {
+   return cached(`wholesale:ctl:subcategories:${categoryId || 'all'}`, TTL.medium, async () => {
     // Public endpoint - no auth required
     const serviceClient = this.supabaseService.getServiceClient();
 
@@ -198,10 +202,12 @@ export class ProductsController {
       slug: sub.slug,
       categoryId: sub.category_id,
     }));
+   });
   }
 
   @Get('category-filters')
   async getCategoryFilters(@Query('categoryId') categoryId?: string) {
+   return cached(`wholesale:ctl:filters:${categoryId || 'all'}`, TTL.long, async () => {
     // Public endpoint - no auth required
     // Returns filter configuration for a specific category
     const serviceClient = this.supabaseService.getServiceClient();
@@ -231,10 +237,12 @@ export class ProductsController {
       options: filter.options,
       isRequired: filter.is_required,
     }));
+   });
   }
 
   @Get('brands')
   async getBrands() {
+   return cached('wholesale:ctl:brands', TTL.medium, async () => {
     // Public endpoint - returns all approved brands for filtering
     const serviceClient = this.supabaseService.getServiceClient();
 
@@ -256,6 +264,7 @@ export class ProductsController {
       slug: brand.brand_name,
       logoUrl: brand.logo_url,
     }));
+   });
   }
 
   @Get('slug/:slug')

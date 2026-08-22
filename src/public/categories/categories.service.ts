@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
+import { cached, TTL } from '../../common/cache.util';
 
 @Injectable()
 export class PublicCategoriesService {
@@ -12,32 +13,35 @@ export class PublicCategoriesService {
    * without touching `is_active` (so sellers can still list into them).
    */
   private async getCategoryIdsWithActiveProducts(): Promise<Set<string>> {
-    const serviceClient = this.supabaseService.getServiceClient();
-    const ids = new Set<string>();
-
-    const [wholesale, retail, social] = await Promise.all([
-      serviceClient.from('active_wholesale_products').select('category_id'),
-      serviceClient
-        .from('retail_products')
-        .select('category_id')
-        .eq('status', 'active')
-        .is('deleted_at', null),
-      serviceClient
-        .from('social_products')
-        .select('category_id')
-        .eq('status', 'active'),
-    ]);
-
-    [wholesale.data, retail.data, social.data].forEach((rows) => {
-      (rows || []).forEach((row: any) => {
-        if (row.category_id) ids.add(row.category_id);
+    // Cached: these are 3 full-table scans; without caching they run on every
+    // homepage/shop load and were a major source of Supabase egress.
+    const ids = await cached('categories:product-ids', TTL.long, async () => {
+      const serviceClient = this.supabaseService.getServiceClient();
+      const set = new Set<string>();
+      const [wholesale, retail, social] = await Promise.all([
+        serviceClient.from('active_wholesale_products').select('category_id'),
+        serviceClient
+          .from('retail_products')
+          .select('category_id')
+          .eq('status', 'active')
+          .is('deleted_at', null),
+        serviceClient
+          .from('social_products')
+          .select('category_id')
+          .eq('status', 'active'),
+      ]);
+      [wholesale.data, retail.data, social.data].forEach((rows) => {
+        (rows || []).forEach((row: any) => {
+          if (row.category_id) set.add(row.category_id);
+        });
       });
+      return [...set];
     });
-
-    return ids;
+    return new Set(ids);
   }
 
   async getAllCategoriesWithSubcategories() {
+   return cached('categories:all-with-subs', TTL.medium, async () => {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Fetch all active categories
@@ -99,6 +103,7 @@ export class PublicCategoriesService {
       imageUrl: cat.image_url,
       subcategories: subcategoriesMap.get(cat.id) || [],
     }));
+   });
   }
 
   async getCategoryBySlug(slug: string) {

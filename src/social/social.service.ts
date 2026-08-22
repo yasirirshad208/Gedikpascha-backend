@@ -8,6 +8,7 @@ import {
 import { SupabaseService } from '../supabase/supabase.service';
 import { SocialUploadService } from './social-upload.service';
 import { SocialLiveProviderService } from './live-provider.service';
+import { cached } from '../common/cache.util';
 
 type FeedMode = 'all' | 'posts' | 'reels' | 'closet';
 type HomeFeedSort = 'trending' | 'newest' | 'following' | 'price_low';
@@ -310,8 +311,10 @@ export class SocialService {
     key: string,
     loader: () => Promise<T>,
   ): Promise<T> {
-    void key;
-    return loader();
+    // Route through the shared, memory-bounded cache (per-viewer safe: keys
+    // already include userId; anonymous/bot traffic shares one entry). Short
+    // TTL so new content still appears within seconds.
+    return cached(`social:${key}`, this.socialReadCacheTtlMs, loader);
   }
 
   private normalizeLocale(locale?: string | null): string {
@@ -13074,6 +13077,7 @@ export class SocialService {
   }
 
   async getTaxonomy(withProductsOnly = false) {
+   return cached(`social:taxonomy:${withProductsOnly}`, 300_000, async () => {
     const [categoriesResult, subcategoriesResult, subSubcategoriesResult] =
       await Promise.all([
         this.serviceClient
@@ -13143,5 +13147,6 @@ export class SocialService {
       ...category,
       subcategories: subMap.get(category.id) ?? [],
     }));
+   });
   }
 }

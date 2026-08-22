@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
+import { cached, TTL, clearCache } from '../../common/cache.util';
 import { RegisterRetailBrandDto } from './dto/register-brand';
 import { UpdateRetailBrandDto } from './dto/update-brand';
 import { SubMerchantsService } from '../../payments/sub-merchants/sub-merchants.service';
@@ -178,6 +179,21 @@ export class RetailBrandsService {
     limit = 12,
     search?: string,
   ) {
+    // Cache only the public approved listing (no search) — admin views stay live.
+    if (status === 'approved' && !search) {
+      return cached(`retail:brands:approved:${page}:${limit}`, TTL.medium, () =>
+        this.loadAllBrands(status, page, limit, search),
+      );
+    }
+    return this.loadAllBrands(status, page, limit, search);
+  }
+
+  private async loadAllBrands(
+    status?: 'pending' | 'approved' | 'rejected',
+    page = 1,
+    limit = 12,
+    search?: string,
+  ) {
     const serviceClient = this.supabaseService.getServiceClient();
     const offset = (page - 1) * limit;
 
@@ -290,6 +306,8 @@ export class RetailBrandsService {
     adminUserId: string,
     rejectionReason?: string,
   ) {
+    // Approving/rejecting changes the public approved-brands list — drop its cache.
+    clearCache('retail:brands:');
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Check if brand exists

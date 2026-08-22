@@ -7,6 +7,22 @@ import {
 import { SupabaseService } from '../../supabase/supabase.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { cached, TTL, clearCache } from '../../common/cache.util';
+
+/**
+ * Columns returned for PUBLIC product LISTINGS (cards). Deliberately excludes the
+ * heavy, detail-only columns — product_details & size_chart (JSONB), description,
+ * short_description, meta_* and shipping_info — which cards never use. This cuts
+ * per-row egress dramatically. Detail pages (getProductBySlug) still fetch '*'.
+ */
+const WHOLESALE_LIST_COLUMNS =
+  'id, wholesale_brand_id, category_id, subcategory_id, name, slug, sku, ' +
+  'wholesale_price, sale_percentage, retail_price, barcode, vat_rate, model_code, ' +
+  'min_order_quantity, min_order_amount, stock_quantity, track_inventory, ' +
+  'low_stock_threshold, total_sold, status, is_featured, condition, rating, ' +
+  'review_count, visited_count, favourites_count, is_shipping_free, shipping_cost, ' +
+  'estimated_delivery_days, created_at, updated_at, brand_status, brand_name, ' +
+  'category_name, category_active, subcategory_name, subcategory_active';
 
 @Injectable()
 export class ProductsService {
@@ -427,6 +443,10 @@ export class ProductsService {
         }
       }
     }
+
+    // New product affects public listings + category presence — drop caches.
+    clearCache('wholesale:');
+    clearCache('categories:');
 
     // Fetch complete product with relations
     return this.getProductById(product.id, userId);
@@ -1335,6 +1355,8 @@ export class ProductsService {
       }
     }
 
+    clearCache('wholesale:');
+    clearCache('categories:');
     return this.getProductById(productId, userId);
   }
 
@@ -1375,19 +1397,23 @@ export class ProductsService {
       );
     }
 
+    clearCache('wholesale:');
+    clearCache('categories:');
     return { message: 'Product deleted successfully' };
   }
 
   // Public methods (no auth required) - use active_wholesale_products view
   async getPopularProducts(limit: number = 24) {
+   return cached(`wholesale:popular:${limit}`, TTL.short, async () => {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Get products ordered by total_sold DESC (view already includes brand_name)
     const { data: products, error: productsError } = await serviceClient
       .from('active_wholesale_products')
-      .select('*')
+      .select(WHOLESALE_LIST_COLUMNS)
       .order('total_sold', { ascending: false })
-      .limit(limit);
+      .limit(limit)
+      .returns<any[]>();
 
     if (productsError) {
       throw new BadRequestException(
@@ -1414,17 +1440,20 @@ export class ProductsService {
       ...product,
       images: productImages.filter((img) => img.product_id === product.id),
     }));
+   });
   }
 
   async getNewArrivals(limit: number = 24) {
+   return cached(`wholesale:new-arrivals:${limit}`, TTL.short, async () => {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Get products ordered by created_at DESC (view already includes brand_name)
     const { data: products, error: productsError } = await serviceClient
       .from('active_wholesale_products')
-      .select('*')
+      .select(WHOLESALE_LIST_COLUMNS)
       .order('created_at', { ascending: false })
-      .limit(limit);
+      .limit(limit)
+      .returns<any[]>();
 
     if (productsError) {
       throw new BadRequestException(
@@ -1451,18 +1480,21 @@ export class ProductsService {
       ...product,
       images: productImages.filter((img) => img.product_id === product.id),
     }));
+   });
   }
 
   async getSaleProducts(limit: number = 24) {
+   return cached(`wholesale:sale:${limit}`, TTL.short, async () => {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Get products with sale_percentage > 0, ordered by sale_percentage DESC (view already includes brand_name)
     const { data: products, error: productsError } = await serviceClient
       .from('active_wholesale_products')
-      .select('*')
+      .select(WHOLESALE_LIST_COLUMNS)
       .gt('sale_percentage', 0)
       .order('sale_percentage', { ascending: false })
-      .limit(limit);
+      .limit(limit)
+      .returns<any[]>();
 
     if (productsError) {
       throw new BadRequestException(
@@ -1489,6 +1521,7 @@ export class ProductsService {
       ...product,
       images: productImages.filter((img) => img.product_id === product.id),
     }));
+   });
   }
 
   async getAllProducts(
@@ -1516,6 +1549,15 @@ export class ProductsService {
     features?: string[],
     dynamicFilters?: Record<string, string[]>,
   ) {
+   const cacheKey =
+     'wholesale:all:' +
+     JSON.stringify([
+       page, limit, search, categoryId, categorySlug, subcategoryId, sortBy,
+       filter, priceMin, priceMax, minOrder, brandIds, rating, inStock,
+       freeShipping, colors, sizes, materials, gender, productType, style,
+       features, dynamicFilters,
+     ]);
+   return cached(cacheKey, TTL.short, async () => {
     const serviceClient = this.supabaseService.getServiceClient();
     const offset = (page - 1) * limit;
 
@@ -1672,10 +1714,10 @@ export class ProductsService {
       .from('active_wholesale_products')
       .select('*', { count: 'exact', head: true });
 
-    // Build query for products
+    // Build query for products (slim columns — no heavy JSONB/text; cards don't use them)
     let productsQuery = serviceClient
       .from('active_wholesale_products')
-      .select('*');
+      .select(WHOLESALE_LIST_COLUMNS);
 
     // Apply product ID filter from pack variant/variation filters
     if (filteredProductIds !== null) {
@@ -1906,7 +1948,7 @@ export class ProductsService {
       { data: products, error: productsError },
     ] = await Promise.all([
       countQuery,
-      productsQuery.range(offset, offset + limit - 1),
+      productsQuery.range(offset, offset + limit - 1).returns<any[]>(),
     ]);
 
     if (countError) {
@@ -1952,6 +1994,7 @@ export class ProductsService {
         totalPages,
       },
     };
+   });
   }
 
   async getSearchSuggestions(query: string, limit: number = 8) {
@@ -2040,6 +2083,15 @@ export class ProductsService {
   }
 
   async getProductBySlug(slug: string, userId?: string) {
+    // Public (anonymous) detail views are cacheable and are the crawler target.
+    // Authenticated views may return the owner's own draft, so bypass the cache.
+    if (userId) return this.loadProductBySlug(slug, userId);
+    return cached(`wholesale:slug:${slug}`, TTL.short, () =>
+      this.loadProductBySlug(slug),
+    );
+  }
+
+  private async loadProductBySlug(slug: string, userId?: string) {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // First try to get from active_wholesale_products view (only active products with approved brands)

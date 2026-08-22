@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
+import { cached, TTL, clearCache } from '../../common/cache.util';
 import { RegisterBrandDto } from './dto/register-brand';
 import { UpdateBrandDto } from './dto/update-brand';
 import { SubMerchantsService } from '../../payments/sub-merchants/sub-merchants.service';
@@ -171,6 +172,21 @@ export class BrandsService {
     limit = 12,
     search?: string,
   ) {
+    // Cache only the public approved listing (no search) — admin views stay live.
+    if (status === 'approved' && !search) {
+      return cached(`wholesale:brands:approved:${page}:${limit}`, TTL.medium, () =>
+        this.loadAllBrands(status, page, limit, search),
+      );
+    }
+    return this.loadAllBrands(status, page, limit, search);
+  }
+
+  private async loadAllBrands(
+    status?: 'pending' | 'approved' | 'rejected',
+    page = 1,
+    limit = 12,
+    search?: string,
+  ) {
     // Use service client to bypass RLS for admin operations
     const serviceClient = this.supabaseService.getServiceClient();
 
@@ -287,6 +303,8 @@ export class BrandsService {
     status: 'approved' | 'rejected',
     adminUserId: string,
   ) {
+    // Approving/rejecting changes the public approved-brands list — drop its cache.
+    clearCache('wholesale:brands:');
     // Use service client to bypass RLS for admin operations
     const serviceClient = this.supabaseService.getServiceClient();
 
@@ -605,6 +623,8 @@ export class BrandsService {
       sizes?: string[];
     } = {},
   ) {
+   const cacheKey = `wholesale:brand-products:${brandId}:${page}:${limit}:${JSON.stringify(opts)}`;
+   return cached(cacheKey, TTL.short, async () => {
     const serviceClient = this.supabaseService.getServiceClient();
     const {
       filter,
@@ -881,5 +901,6 @@ export class BrandsService {
         totalPages: Math.ceil((count || 0) / limit),
       },
     };
+   });
   }
 }

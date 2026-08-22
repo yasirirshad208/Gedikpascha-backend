@@ -4,12 +4,26 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
+import { cached, TTL, clearCache } from '../../common/cache.util';
+
+/**
+ * Columns for PUBLIC retail LISTINGS (cards). Excludes heavy detail-only columns
+ * (product_details JSONB, description, short_description, meta_*) that cards
+ * never use — cuts per-row egress. Detail pages still fetch full rows.
+ */
+const RETAIL_LIST_COLUMNS =
+  'id, retail_brand_id, category_id, subcategory_id, name, slug, sku, ' +
+  'cost_price, retail_price, compare_at_price, sale_percentage, stock_quantity, ' +
+  'track_inventory, low_stock_threshold, source_wholesale_product_id, ' +
+  'source_wholesale_slug, is_auto_imported, is_exchangeable, total_sold, rating, ' +
+  'review_count, view_count, status, created_at, updated_at';
 
 @Injectable()
 export class RetailProductsService {
   constructor(private readonly supabaseService: SupabaseService) {}
 
   async getBrandCategories(brandId: string) {
+   return cached(`retail:brand-categories:${brandId}`, TTL.medium, async () => {
     const supabase = this.supabaseService.getServiceClient();
 
     // Get distinct category_ids from brand's active products
@@ -43,6 +57,7 @@ export class RetailProductsService {
       name: c.name,
       slug: c.slug,
     }));
+   });
   }
 
   async getMyProducts(
@@ -557,6 +572,9 @@ export class RetailProductsService {
       }
     }
 
+    // Edited product affects public listings + category presence — drop caches.
+    clearCache('retail:');
+    clearCache('categories:');
     return this.getProductById(productId, userId);
   }
 
@@ -575,6 +593,13 @@ export class RetailProductsService {
     sizes?: string,
     dynamicFilters?: string,
   ) {
+   const cacheKey =
+     'retail:public:' +
+     JSON.stringify([
+       brandId, sortBy, priceRange, search, page, limit, filter, category,
+       subcategory, inStock, colors, sizes, dynamicFilters,
+     ]);
+   return cached(cacheKey, TTL.short, async () => {
     const supabase = this.supabaseService.getServiceClient();
 
     // Build query - only active products with approved brands, include images
@@ -582,7 +607,7 @@ export class RetailProductsService {
       .from('retail_products')
       .select(
         `
-        *,
+        ${RETAIL_LIST_COLUMNS},
         retail_brands!inner(id, display_name, logo_url, status),
         retail_product_images(id, image_url, display_order, is_primary)
       `,
@@ -1180,9 +1205,11 @@ export class RetailProductsService {
         totalPages,
       },
     };
+   });
   }
 
   async getProductBySlug(slug: string) {
+   return cached(`retail:slug:${slug}`, TTL.short, async () => {
     const supabase = this.supabaseService.getServiceClient();
 
     // Get product by slug with all related data
@@ -1255,6 +1282,7 @@ export class RetailProductsService {
       ...product,
       related_products: relatedProducts || [],
     };
+   });
   }
 
   // Get all inventory rows for a product, aggregated by combination_key
@@ -2006,6 +2034,8 @@ export class RetailProductsService {
       console.error('Failed to seed inventory on import:', inventoryError);
     }
 
+    clearCache('retail:');
+    clearCache('categories:');
     return this.getProductById(retailProduct.id, userId);
   }
 }
