@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerBehindProxyGuard } from './common/throttler-proxy.guard';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { SupabaseModule } from './supabase/supabase.module';
@@ -24,6 +26,15 @@ import { PaymentsModule } from './payments/payments.module';
 
 @Module({
   imports: [
+    // Rate limiting: two tiers per visitor IP (resolved via ThrottlerBehindProxyGuard).
+    //  - 'short': blocks rapid floods  (max 30 requests / second)
+    //  - 'long' : blocks sustained abuse (max 300 requests / minute)
+    // Generous enough for normal browsing (a page fires several API calls),
+    // strict enough to stop a single bot hammering the API.
+    ThrottlerModule.forRoot([
+      { name: 'short', ttl: 1000, limit: 30 },
+      { name: 'long', ttl: 60000, limit: 300 },
+    ]),
     SupabaseModule,
     CloudinaryModule,
     AuthModule,
@@ -46,6 +57,11 @@ import { PaymentsModule } from './payments/payments.module';
   controllers: [AppController],
   providers: [
     AppService,
+    // Rate limiter runs first (before auth/admin checks) to shield the API.
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerBehindProxyGuard,
+    },
     {
       provide: APP_GUARD,
       useClass: AdminOnlyGuard,

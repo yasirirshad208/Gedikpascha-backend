@@ -13,6 +13,11 @@ async function bootstrap() {
     rawBody: true,
   });
 
+  // Behind reverse proxies (Vercel rewrite proxy, Cloudflare, Render's LB).
+  // Lets Express derive req.ip from forwarded headers so rate limiting and
+  // logging see the real visitor IP instead of the proxy address.
+  app.getHttpAdapter().getInstance().set('trust proxy', true);
+
   // Enable CORS for frontend
   app.enableCors({
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
