@@ -4215,26 +4215,55 @@ export class SocialService {
     const provider = 'livekit';
     const nowIso = new Date().toISOString();
 
+    // Optional scheduled time. Sessions are never auto-started — the host
+    // still presses "Go live" — so this is only used for display/ordering.
+    let scheduledAt: string | null = null;
+    const rawScheduledAt = String(
+      payload?.scheduledAt ?? payload?.scheduled_at ?? '',
+    ).trim();
+    if (rawScheduledAt) {
+      const parsed = new Date(rawScheduledAt);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new BadRequestException('scheduledAt must be a valid date/time');
+      }
+      if (parsed.getTime() < Date.now() - 60_000) {
+        throw new BadRequestException('scheduledAt must be in the future');
+      }
+      scheduledAt = parsed.toISOString();
+    }
+
+    // Only send scheduled_at when a time was actually chosen: the column is
+    // added by migration 038, and referencing it unconditionally would break
+    // session creation everywhere that migration has not been applied yet.
+    const insertPayload: Record<string, unknown> = {
+      host_id: userId,
+      title,
+      topic,
+      cover_image_url: coverImageUrl,
+      cover_media_path: coverMediaPath,
+      provider,
+      playback_url: playbackUrl,
+      playback_hls_url: playbackUrl,
+      status: 'scheduled',
+      status_changed_at: nowIso,
+    };
+    if (scheduledAt) {
+      insertPayload.scheduled_at = scheduledAt;
+    }
+
     const { data, error } = await this.serviceClient
       .from('social_live_sessions')
-      .insert({
-        host_id: userId,
-        title,
-        topic,
-        cover_image_url: coverImageUrl,
-        cover_media_path: coverMediaPath,
-        provider,
-        playback_url: playbackUrl,
-        playback_hls_url: playbackUrl,
-        status: 'scheduled',
-        status_changed_at: nowIso,
-      })
+      .insert(insertPayload)
       .select('*')
       .single();
     if (error || !data) {
-      throw new BadRequestException(
-        `Failed to create live session: ${error?.message}`,
-      );
+      const reason = String(error?.message ?? '');
+      if (/scheduled_at/.test(reason)) {
+        throw new BadRequestException(
+          'Live scheduling migration is not applied. Please run migration 038 first.',
+        );
+      }
+      throw new BadRequestException(`Failed to create live session: ${reason}`);
     }
 
     return this.getLiveSessionDetail(userId, data.id);

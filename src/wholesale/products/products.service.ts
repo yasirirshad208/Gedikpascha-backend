@@ -15,9 +15,14 @@ import { cached, TTL, clearCache } from '../../common/cache.util';
  * short_description, meta_* and shipping_info — which cards never use. This cuts
  * per-row egress dramatically. Detail pages (getProductBySlug) still fetch '*'.
  */
+// Columns for list endpoints. These all run against the
+// active_wholesale_products VIEW, which exposes fewer columns than the
+// wholesale_products table — retail_price, barcode, vat_rate and model_code
+// exist only on the table, and selecting them made every list query fail with
+// "column does not exist", so no products were returned.
 const WHOLESALE_LIST_COLUMNS =
   'id, wholesale_brand_id, category_id, subcategory_id, name, slug, sku, ' +
-  'wholesale_price, sale_percentage, retail_price, barcode, vat_rate, model_code, ' +
+  'wholesale_price, sale_percentage, ' +
   'min_order_quantity, min_order_amount, stock_quantity, track_inventory, ' +
   'low_stock_threshold, total_sold, status, is_featured, condition, rating, ' +
   'review_count, visited_count, favourites_count, is_shipping_free, shipping_cost, ' +
@@ -1502,8 +1507,29 @@ export class ProductsService {
       );
     }
 
+    // When nothing is discounted the Special Offers strip would be empty, so
+    // fall back to a random pick of active products. They keep their real
+    // sale_percentage of 0, so the UI must not badge them as discounted.
+    let list = products ?? [];
+    if (list.length === 0) {
+      const { data: fallbackPool } = await serviceClient
+        .from('active_wholesale_products')
+        .select(WHOLESALE_LIST_COLUMNS)
+        .limit(Math.max(limit * 3, 60))
+        .returns<any[]>();
+
+      const pool = [...(fallbackPool ?? [])];
+      // Fisher-Yates so the selection differs between cache windows.
+      for (let i = pool.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+      list = pool.slice(0, limit);
+    }
+
     // Get images for all products
-    const productIds = (products || []).map((p) => p.id);
+    const products_ = list;
+    const productIds = products_.map((p) => p.id);
     let productImages: any[] = [];
 
     if (productIds.length > 0) {
@@ -1517,7 +1543,7 @@ export class ProductsService {
     }
 
     // Map images to products and format response
-    return (products || []).map((product) => ({
+    return products_.map((product) => ({
       ...product,
       images: productImages.filter((img) => img.product_id === product.id),
     }));
