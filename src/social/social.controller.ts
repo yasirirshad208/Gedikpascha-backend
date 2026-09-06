@@ -1204,7 +1204,8 @@ export class SocialController {
   async updateSwapProposalAction(
     @Headers('authorization') authHeader: string,
     @Param('proposalId') proposalId: string,
-    @Body() payload: { action?: string },
+    // selectedProductIds (accept only) — which offered items are being taken.
+    @Body() payload: { action?: string; selectedProductIds?: string[] },
   ) {
     const user = await this.getRequiredUser(authHeader);
     const action = String(payload?.action ?? '')
@@ -1217,6 +1218,7 @@ export class SocialController {
       user.id,
       proposalId,
       action as 'accept' | 'decline' | 'withdraw',
+      payload,
     );
   }
 
@@ -1225,9 +1227,11 @@ export class SocialController {
   async acceptSwapProposal(
     @Headers('authorization') authHeader: string,
     @Param('proposalId') proposalId: string,
+    // Optional { selectedProductIds } — which of the offered items to accept.
+    @Body() payload?: any,
   ) {
     const user = await this.getRequiredUser(authHeader);
-    return this.socialService.acceptSwapProposal(user.id, proposalId);
+    return this.socialService.acceptSwapProposal(user.id, proposalId, payload);
   }
 
   @Post('exchange/proposals/:proposalId/decline')

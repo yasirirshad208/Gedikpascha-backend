@@ -78,26 +78,41 @@ export class CloudinaryService {
     const resourceType = opts.resourceType ?? 'image';
     const maxWidth = opts.maxWidth ?? 1600;
 
+    // Reel videos can be up to 100 MB. The SDK's 60s default timeout and its
+    // single-request upload both fall over on files that size, surfacing as
+    // "Failed to upload media: Request Timeout". Videos therefore upload in
+    // chunks with a much longer timeout.
+    const isVideoUpload = resourceType === 'video' || resourceType === 'auto';
+    const uploadOptions: Record<string, unknown> = {
+      folder: opts.folder,
+      resource_type: resourceType,
+      overwrite: false,
+      unique_filename: true,
+      timeout: isVideoUpload ? 600_000 : 120_000,
+    };
+    if (isVideoUpload) {
+      uploadOptions.chunk_size = 6 * 1024 * 1024;
+    }
+
     const raw = await new Promise<any>((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(
-        {
-          folder: opts.folder,
-          resource_type: resourceType,
-          overwrite: false,
-          unique_filename: true,
-        },
-        (error, result) => {
-          if (error) return reject(error);
-          if (!result) return reject(new Error('Empty Cloudinary response'));
-          resolve(result);
-        },
-      );
+      const handler = (error: any, result: any) => {
+        if (error) return reject(error);
+        if (!result) return reject(new Error('Empty Cloudinary response'));
+        resolve(result);
+      };
+      const stream = isVideoUpload
+        ? cloudinary.uploader.upload_chunked_stream(uploadOptions, handler)
+        : cloudinary.uploader.upload_stream(uploadOptions, handler);
       Readable.from(buffer).pipe(stream);
     }).catch((err) => {
       this.logger.error(`Cloudinary upload failed: ${err?.message ?? err}`);
-      throw new BadRequestException(
-        `Failed to upload media: ${err?.message ?? 'Unknown error'}`,
-      );
+      const reason = String(err?.message ?? 'Unknown error');
+      if (/timeout/i.test(reason)) {
+        throw new BadRequestException(
+          'Upload timed out. The file may be too large or the connection too slow — try a shorter or smaller video.',
+        );
+      }
+      throw new BadRequestException(`Failed to upload media: ${reason}`);
     });
 
     const deliveredResourceType = raw.resource_type || resourceType;

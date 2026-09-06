@@ -6052,7 +6052,9 @@ export class SocialService {
     await hydrateContent(
       'reels',
       'social_reels',
-      'id, user_id, caption, reel_url, thumbnail_url, category, views_count, likes_count, comments_count, saves_count, shares_count, created_at, status',
+      // social_reels has no reel_url/thumbnail_url/category columns — media is
+      // resolved separately by enrichReels() from social_reel_media.
+      'id, user_id, caption, category_id, views_count, likes_count, comments_count, saves_count, shares_count, created_at, status',
       'caption',
     );
 
@@ -6415,6 +6417,7 @@ export class SocialService {
       displayName?: string | null;
       bio?: string | null;
       avatarUrl?: string | null;
+      coverUrl?: string | null;
       isPrivate?: boolean;
     },
   ) {
@@ -6452,6 +6455,11 @@ export class SocialService {
     if (payload.avatarUrl !== undefined) {
       const avatarUrl = String(payload.avatarUrl ?? '').trim();
       updateData.avatar_url = avatarUrl || null;
+    }
+
+    if (payload.coverUrl !== undefined) {
+      const coverUrl = String(payload.coverUrl ?? '').trim();
+      updateData.cover_url = coverUrl || null;
     }
 
     if (payload.isPrivate !== undefined) {
@@ -6746,6 +6754,28 @@ export class SocialService {
     if (!existing) throw new NotFoundException('Social product not found');
 
     const updateData: Record<string, unknown> = {};
+
+    // Publishing / unpublishing a listing. Imports land as 'draft', so this is
+    // how a seller makes one visible to shoppers.
+    if (payload.status !== undefined) {
+      const nextStatus = String(payload.status ?? '').trim().toLowerCase();
+      const allowed = ['draft', 'active', 'inactive', 'archived'];
+      if (!allowed.includes(nextStatus)) {
+        throw new BadRequestException(
+          `status must be one of: ${allowed.join(', ')}`,
+        );
+      }
+      if (nextStatus === 'active' && !Number(existing.available_quantity ?? 0)) {
+        throw new BadRequestException(
+          'Cannot publish a product with no available quantity',
+        );
+      }
+      updateData.status = nextStatus;
+      if (nextStatus === 'active' && !existing.published_at) {
+        updateData.published_at = new Date().toISOString();
+      }
+    }
+
     if (payload.title !== undefined) updateData.title = payload.title?.trim();
     if (payload.slug !== undefined) {
       const nextSlug = this.slugifyText(payload.slug) || '';
@@ -6897,11 +6927,52 @@ export class SocialService {
     return full?.product ?? null;
   }
 
+  /**
+   * Extracts the purchased variation from a retail order item.
+   *
+   * Retail stores this in three possible shapes, so all are handled:
+   *   - explicit size_value / color_value columns
+   *   - a variation_details JSON object ({ size, color, ... })
+   *   - a combination_key string, e.g. "color:White|size:Medium"
+   */
+  private retailItemVariation(item: any): {
+    size: string | null;
+    color: string | null;
+  } {
+    const clean = (value: unknown): string | null => {
+      const text = String(value ?? '').trim();
+      return text ? text : null;
+    };
+
+    let size = clean(item?.size_value);
+    let color = clean(item?.color_value);
+
+    const details = item?.variation_details;
+    if (details && typeof details === 'object') {
+      size = size ?? clean((details as any).size ?? (details as any).Size);
+      color = color ?? clean((details as any).color ?? (details as any).Color);
+    }
+
+    const key = clean(item?.combination_key);
+    if (key && (!size || !color)) {
+      for (const part of key.split('|')) {
+        const [rawName, ...rest] = part.split(':');
+        const name = String(rawName ?? '').trim().toLowerCase();
+        const value = clean(rest.join(':'));
+        if (!value) continue;
+        if (!size && name === 'size') size = value;
+        if (!color && name === 'color') color = value;
+      }
+    }
+
+    return { size, color };
+  }
+
   async getImportableRetail(userId: string) {
     const { data: orderItems, error } = await this.serviceClient
       .from('retail_order_items')
       .select(
-        'id, order_id, quantity, unit_price, product_name, brand_name, product_image, product_id, retail_orders!inner(id, user_id, order_number, status)',
+        'id, order_id, quantity, unit_price, product_name, brand_name, product_image, product_id, combination_key, variation_details, color_value, size_value, retail_orders!inner(id, user_id, order_number, status)',
       )
       .eq('retail_orders.user_id', userId)
       .in('retail_orders.status', ['delivered', 'completed'])
@@ -6951,11 +7022,59 @@ export class SocialService {
           importedQuantity: importedQty,
           remainingQuantity: Math.max(0, purchasedQty - importedQty),
           unitPrice: Number(item.unit_price ?? 0),
+          // Variation the buyer originally purchased.
+          ...this.retailItemVariation(item),
         };
       })
       .filter((item) => item.remainingQuantity > 0);
 
-    return { items };
+    // Attach any listings already imported from the same retail product, so the
+    // import form can pre-fill the price the seller used last time and warn
+    // that changing it re-prices the existing listing.
+    const retailProductIds = Array.from(
+      new Set(
+        items
+          .map((item) => item.productId)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+
+    const listingsByProduct = new Map<string, any[]>();
+    if (retailProductIds.length) {
+      const { data: listings } = await this.serviceClient
+        .from('social_products')
+        .select(
+          'id, title, price, size, color, condition, listing_type, status, available_quantity, source_retail_product_id, created_at',
+        )
+        .eq('seller_id', userId)
+        .eq('source_type', 'retail_import')
+        .in('source_retail_product_id', retailProductIds)
+        .in('status', ['draft', 'active', 'inactive'])
+        .order('created_at', { ascending: false });
+
+      for (const listing of listings ?? []) {
+        const key = String(listing.source_retail_product_id);
+        if (!listingsByProduct.has(key)) listingsByProduct.set(key, []);
+        listingsByProduct.get(key)!.push({
+          id: listing.id,
+          title: listing.title,
+          price: Number(listing.price ?? 0),
+          size: listing.size ?? null,
+          color: listing.color ?? null,
+          condition: listing.condition ?? null,
+          listingType: listing.listing_type ?? null,
+          status: listing.status ?? null,
+          availableQuantity: Number(listing.available_quantity ?? 0),
+        });
+      }
+    }
+
+    return {
+      items: items.map((item) => ({
+        ...item,
+        existingListings: listingsByProduct.get(String(item.productId)) ?? [],
+      })),
+    };
   }
 
   async importRetailProduct(userId: string, payload: any) {
@@ -6969,7 +7088,7 @@ export class SocialService {
     const { data: orderItem, error: orderItemError } = await this.serviceClient
       .from('retail_order_items')
       .select(
-        'id, order_id, product_id, product_name, brand_name, product_image, quantity, unit_price, variation_details, retail_orders!inner(id, user_id, order_number, status)',
+        'id, order_id, product_id, product_name, brand_name, product_image, quantity, unit_price, variation_details, combination_key, color_value, size_value, retail_orders!inner(id, user_id, order_number, status)',
       )
       .eq('id', retailOrderItemId)
       .eq('retail_orders.user_id', userId)
@@ -6996,15 +7115,95 @@ export class SocialService {
       );
     }
 
-    const { data: retailProduct } = await this.serviceClient
-      .from('retail_products')
-      .select('id, category_id, subcategory_id, sub_subcategory_id')
-      .eq('id', orderItem.product_id)
-      .maybeSingle();
+    // NOTE: retail_products has category_id/subcategory_id only — it has no
+    // sub_subcategory_id column. Selecting one made this query fail (42703),
+    // and because the error was discarded the import surfaced the misleading
+    // "no valid category mapping" message instead.
+    const { data: retailProduct, error: retailProductError } =
+      await this.serviceClient
+        .from('retail_products')
+        .select('id, category_id, subcategory_id')
+        .eq('id', orderItem.product_id)
+        .maybeSingle();
 
+    if (retailProductError) {
+      throw new BadRequestException(
+        `Failed to load retail product: ${retailProductError.message}`,
+      );
+    }
     if (!retailProduct?.category_id) {
       throw new BadRequestException(
         'Retail product has no valid category mapping',
+      );
+    }
+
+    const retailVariation = this.retailItemVariation(orderItem);
+
+    // Values that decide whether this import is the *same sellable unit* as an
+    // existing listing.
+    const importedSize = payload.size ?? retailVariation.size ?? null;
+    const importedColor = payload.color ?? retailVariation.color ?? null;
+    const importedListingType = payload.listingType ?? 'closet';
+    const importedCondition = payload.condition ?? 'good';
+    const importedPrice = Number(payload.price ?? orderItem.unit_price ?? 0);
+
+    // Re-importing the same purchase should top up the existing listing rather
+    // than create a duplicate. Stock lives on the listing as a single
+    // available_quantity (there is no per-variation stock), so a listing may
+    // only absorb units that are identical in every respect — a different size
+    // or colour MUST stay a separate listing, otherwise the quantity could not
+    // tell M apart from L and the item could be oversold.
+    const { data: mergeCandidates } = await this.serviceClient
+      .from('social_products')
+      .select('*')
+      .eq('seller_id', userId)
+      .eq('source_type', 'retail_import')
+      .eq('source_retail_product_id', orderItem.product_id)
+      .in('status', ['draft', 'active', 'inactive']);
+
+    const sameText = (left: unknown, right: unknown): boolean =>
+      String(left ?? '').trim().toLowerCase() ===
+      String(right ?? '').trim().toLowerCase();
+
+    // Price is deliberately NOT part of the match: re-importing the same item
+    // at a new price re-prices the existing listing (the seller is told this in
+    // the import form) rather than fragmenting stock across duplicate listings.
+    const mergeTarget = (mergeCandidates ?? []).find(
+      (candidate: any) =>
+        sameText(candidate.size, importedSize) &&
+        sameText(candidate.color, importedColor) &&
+        sameText(candidate.listing_type, importedListingType) &&
+        sameText(candidate.condition, importedCondition),
+    );
+
+    if (mergeTarget) {
+      const { data: merged, error: mergeError } = await this.serviceClient
+        .from('social_products')
+        .update({
+          quantity: Number(mergeTarget.quantity ?? 0) + importQuantity,
+          available_quantity:
+            Number(mergeTarget.available_quantity ?? 0) + importQuantity,
+          // Newest import price wins for the whole listing.
+          price: importedPrice,
+          // A listing that had sold out becomes sellable again.
+          status: mergeTarget.status === 'sold' ? 'active' : mergeTarget.status,
+        })
+        .eq('id', mergeTarget.id)
+        .select('*')
+        .single();
+      if (mergeError || !merged) {
+        throw new BadRequestException(
+          `Failed to add stock to existing listing: ${mergeError?.message}`,
+        );
+      }
+      return this.finishRetailImport(
+        userId,
+        orderItem,
+        retailOrder,
+        merged,
+        importQuantity,
+        retailVariation,
+        true,
       );
     }
 
@@ -7013,6 +7212,7 @@ export class SocialService {
         .from('social_products')
         .insert({
           seller_id: userId,
+          source_retail_product_id: orderItem.product_id,
           title: payload.title?.trim() || orderItem.product_name,
           description:
             payload.description ??
@@ -7021,13 +7221,18 @@ export class SocialService {
           condition: payload.condition ?? 'good',
           category_id: retailProduct.category_id,
           subcategory_id: retailProduct.subcategory_id ?? null,
-          sub_subcategory_id: retailProduct.sub_subcategory_id ?? null,
+          // retail_products carries no sub-subcategory, so leave it unset.
+          sub_subcategory_id: null,
           listing_type: payload.listingType ?? 'closet',
           source_type: 'retail_import',
           status: 'draft',
           price: Number(payload.price ?? orderItem.unit_price ?? 0),
           quantity: importQuantity,
           available_quantity: importQuantity,
+          // Carry over the variation that was actually purchased, so the
+          // imported listing is not missing its size/colour.
+          size: payload.size ?? retailVariation.size,
+          color: payload.color ?? retailVariation.color,
           is_exchangeable: payload.isExchangeable ?? true,
           allow_offers: payload.allowOffers ?? true,
         })
@@ -7053,6 +7258,31 @@ export class SocialService {
       await this.replaceProductAttributes(createdProduct.id, payload);
     }
 
+    return this.finishRetailImport(
+      userId,
+      orderItem,
+      retailOrder,
+      createdProduct,
+      importQuantity,
+      retailVariation,
+      false,
+    );
+  }
+
+  /**
+   * Shared completion step for a retail import: records the snapshot, updates
+   * the import ledger and returns the resulting product. Used by both the
+   * "created a new listing" and "topped up an existing listing" paths.
+   */
+  private async finishRetailImport(
+    userId: string,
+    orderItem: any,
+    retailOrder: any,
+    createdProduct: any,
+    importQuantity: number,
+    retailVariation: { size: string | null; color: string | null },
+    merged: boolean,
+  ) {
     const snapshot = {
       retail_order_id: orderItem.order_id,
       retail_order_item_id: orderItem.id,
@@ -7061,6 +7291,7 @@ export class SocialService {
       product_name: orderItem.product_name,
       brand_name: orderItem.brand_name,
       product_image: orderItem.product_image,
+      variation: retailVariation,
       quantity: orderItem.quantity,
       unit_price: orderItem.unit_price,
       variation_details: orderItem.variation_details,
@@ -7129,7 +7360,7 @@ export class SocialService {
     }
 
     const full = await this.getProductById(createdProduct.id, userId);
-    return full?.product ?? null;
+    return full?.product ? { ...full.product, merged } : null;
   }
 
   // ---------------------------------------------------------------------------
@@ -7998,17 +8229,16 @@ export class SocialService {
       }
     }
 
-    const firstMedia = payload.media[0];
-    const reelThumbnail =
-      firstMedia?.thumbnailUrl ?? firstMedia?.reelUrl ?? null;
     const status = payload.status === 'published' ? 'published' : 'draft';
+    // NOTE: social_reels holds no media columns — the video URL and thumbnail
+    // live on social_reel_media (inserted below). Writing thumbnail_url here
+    // made every reel creation fail with "column does not exist".
     const { data: reel, error } = await this.serviceClient
       .from('social_reels')
       .insert({
         user_id: userId,
         caption: payload.caption ?? null,
         category_id: payload.categoryId ?? null,
-        thumbnail_url: reelThumbnail,
         status,
         published_at: status === 'published' ? new Date().toISOString() : null,
       })
@@ -8020,7 +8250,7 @@ export class SocialService {
     const mediaRows = payload.media.map((media: any) => ({
       reel_id: reel.id,
       reel_url: media.reelUrl,
-      thumbnail_url: media.thumbnailUrl ?? null,
+      thumbnail_url: media.thumbnailUrl ?? media.reelUrl ?? null,
       duration_seconds: media.durationSeconds ?? null,
       width: media.width ?? null,
       height: media.height ?? null,
@@ -9245,6 +9475,81 @@ export class SocialService {
     return source.includes('does not exist') || source.includes('column');
   }
 
+  /**
+   * Collects the set of products being offered in an exchange.
+   *
+   * Accepts the multi-item `offeredProductIds` array and still honours the
+   * legacy single `offeredProductId`, so older clients keep working. Order is
+   * preserved and duplicates dropped; the first entry stays the "primary" item
+   * mirrored into the offered_product_id column.
+   */
+  private normalizeSwapOfferedProductIds(payload: any): string[] {
+    const MAX_OFFER_ITEMS = 10;
+    const raw = Array.isArray(payload?.offeredProductIds)
+      ? payload.offeredProductIds
+      : [payload?.offeredProductId];
+
+    const ids: string[] = [];
+    for (const entry of raw ?? []) {
+      const id = String(entry ?? '').trim();
+      if (id && !ids.includes(id)) ids.push(id);
+    }
+
+    if (!ids.length) {
+      throw new BadRequestException('At least one offered product is required');
+    }
+    if (ids.length > MAX_OFFER_ITEMS) {
+      throw new BadRequestException(
+        `You can offer at most ${MAX_OFFER_ITEMS} items in one exchange`,
+      );
+    }
+    return ids;
+  }
+
+  /** Subset of offered items the listing owner accepted. Defaults to all. */
+  private normalizeSwapSelectedProductIds(
+    payload: any,
+    offeredProductIds: string[],
+  ): string[] {
+    const raw = payload?.selectedProductIds ?? payload?.selectedProductId;
+    if (raw === undefined || raw === null || raw === '') {
+      return [...offeredProductIds];
+    }
+
+    const requested = Array.isArray(raw) ? raw : [raw];
+    const ids: string[] = [];
+    for (const entry of requested) {
+      const id = String(entry ?? '').trim();
+      if (id && !ids.includes(id)) ids.push(id);
+    }
+    if (!ids.length) {
+      throw new BadRequestException('Select at least one item to accept');
+    }
+
+    const unknown = ids.filter((id) => !offeredProductIds.includes(id));
+    if (unknown.length) {
+      throw new BadRequestException(
+        'Selected items must be part of the offered items',
+      );
+    }
+    return ids;
+  }
+
+  private isSwapMultiOfferColumnMissing(
+    error: { message?: string; details?: string; hint?: string } | null,
+  ): boolean {
+    if (!error) return false;
+    const source =
+      `${error.message ?? ''} ${error.details ?? ''} ${error.hint ?? ''}`.toLowerCase();
+    if (
+      !source.includes('offered_product_ids') &&
+      !source.includes('selected_product_ids')
+    ) {
+      return false;
+    }
+    return source.includes('does not exist') || source.includes('column');
+  }
+
   private async createSwapNotification(
     userId: string,
     type: string,
@@ -9433,11 +9738,7 @@ export class SocialService {
       ),
     );
     const offeredProductIds = Array.from(
-      new Set(
-        listings
-          .map((listing) => listing.offered_product_id)
-          .filter((value): value is string => Boolean(value)),
-      ),
+      new Set(listings.flatMap((listing) => this.swapOfferedIdsOf(listing))),
     );
     const wantedCategoryIds = listings
       .map((listing) => listing.wanted_category_id)
@@ -9473,9 +9774,11 @@ export class SocialService {
 
     return listings.map((listing) => {
       const ownerProfile = profiles.get(listing.owner_id);
-      const offeredProduct = listing.offered_product_id
-        ? (productMap.get(listing.offered_product_id) ?? null)
-        : null;
+      const offeredIds = this.swapOfferedIdsOf(listing);
+      const offeredProducts = offeredIds
+        .map((id) => productMap.get(id) ?? null)
+        .filter((product) => product !== null);
+      const offeredProduct = offeredProducts[0] ?? null;
       return {
         ...listing,
         owner_username: ownerProfile?.username ?? null,
@@ -9502,9 +9805,32 @@ export class SocialService {
           offeredProduct,
           listing.offered_quantity,
         ),
+        offered_products: offeredProducts,
+        offered_product_previews: offeredProducts.map((product) =>
+          this.toSwapProductPreview(product, listing.offered_quantity),
+        ),
         can_manage: Boolean(viewerUserId) && listing.owner_id === viewerUserId,
       };
     });
+  }
+
+  /**
+   * All product ids offered on a swap listing/proposal row. Reads the
+   * multi-item column and falls back to the legacy single column, so rows
+   * created before migration 035 still resolve to a one-item set.
+   */
+  private swapOfferedIdsOf(row: any): string[] {
+    const raw = Array.isArray(row?.offered_product_ids)
+      ? row.offered_product_ids
+      : [];
+    const ids: string[] = [];
+    for (const entry of raw) {
+      const id = String(entry ?? '').trim();
+      if (id && !ids.includes(id)) ids.push(id);
+    }
+    const primary = String(row?.offered_product_id ?? '').trim();
+    if (primary && !ids.includes(primary)) ids.unshift(primary);
+    return ids;
   }
 
   private async hydrateSwapProposals(
@@ -9522,9 +9848,7 @@ export class SocialService {
     );
     const offeredProductIds = Array.from(
       new Set(
-        proposals
-          .map((proposal) => proposal.offered_product_id)
-          .filter((value): value is string => Boolean(value)),
+        proposals.flatMap((proposal) => this.swapOfferedIdsOf(proposal)),
       ),
     );
 
@@ -9542,9 +9866,11 @@ export class SocialService {
 
     return proposals.map((proposal) => {
       const proposerProfile = profiles.get(proposal.proposer_id);
-      const offeredProduct = proposal.offered_product_id
-        ? (productMap.get(proposal.offered_product_id) ?? null)
-        : null;
+      const offeredIds = this.swapOfferedIdsOf(proposal);
+      const offeredProducts = offeredIds
+        .map((id) => productMap.get(id) ?? null)
+        .filter((product) => product !== null);
+      const offeredProduct = offeredProducts[0] ?? null;
       return {
         ...proposal,
         proposer_username: proposerProfile?.username ?? null,
@@ -9554,6 +9880,11 @@ export class SocialService {
         offered_product_preview: this.toSwapProductPreview(
           offeredProduct,
           proposal.offered_quantity,
+        ),
+        // Every item on offer, so the listing owner can choose what they want.
+        offered_products: offeredProducts,
+        offered_product_previews: offeredProducts.map((product) =>
+          this.toSwapProductPreview(product, proposal.offered_quantity),
         ),
       };
     });
@@ -10404,22 +10735,23 @@ export class SocialService {
     const title = String(payload?.title ?? '').trim();
     if (!title) throw new BadRequestException('title is required');
 
-    const offeredProductId =
-      String(payload?.offeredProductId ?? '').trim() || null;
-    if (!offeredProductId) {
-      throw new BadRequestException('offeredProductId is required');
-    }
+    const offeredProductIds = this.normalizeSwapOfferedProductIds(payload);
+    // First item stays the "primary" one mirrored into offered_product_id so
+    // existing previews and queries keep working.
+    const offeredProductId = offeredProductIds[0];
     const offeredQuantity = this.normalizeSwapQuantity(
       payload?.offeredQuantity,
       'offeredQuantity',
       { defaultValue: 1 },
     );
-    await this.assertSwapProductOwnedAndActive(
-      userId,
-      offeredProductId,
-      'offeredProduct',
-      offeredQuantity,
-    );
+    for (const productId of offeredProductIds) {
+      await this.assertSwapProductOwnedAndActive(
+        userId,
+        productId,
+        'offeredProduct',
+        offeredQuantity,
+      );
+    }
 
     const wantedMinValue = this.normalizeSwapAmount(
       payload?.wantedMinValue,
@@ -10453,6 +10785,7 @@ export class SocialService {
       .insert({
         owner_id: userId,
         offered_product_id: offeredProductId,
+        offered_product_ids: offeredProductIds,
         offered_quantity: offeredQuantity,
         title,
         description: String(payload?.description ?? '').trim() || null,
@@ -10474,6 +10807,11 @@ export class SocialService {
       if (this.isSwapOfferedQuantityColumnMissing(error)) {
         throw new BadRequestException(
           'Exchange quantity migration is not applied. Please run migration 029 first.',
+        );
+      }
+      if (this.isSwapMultiOfferColumnMissing(error)) {
+        throw new BadRequestException(
+          'Multi-item exchange migration is not applied. Please run migration 035 first.',
         );
       }
       throw new BadRequestException(
@@ -10668,24 +11006,35 @@ export class SocialService {
       throw new BadRequestException('Listing is expired');
     }
 
-    const offeredProductId = String(payload?.offeredProductId ?? '').trim();
-    if (!offeredProductId) {
-      throw new BadRequestException('offeredProductId is required');
-    }
+    const offeredProductIds = this.normalizeSwapOfferedProductIds(payload);
+    const offeredProductId = offeredProductIds[0];
     const offeredQuantity = this.normalizeSwapQuantity(
       payload?.offeredQuantity,
       'offeredQuantity',
       { defaultValue: 1 },
     );
-    if (offeredProductId === listing.offered_product_id) {
+
+    // None of the offered items may be an item the listing itself is offering.
+    const listingOfferedIds: string[] = Array.isArray(
+      listing.offered_product_ids,
+    )
+      ? listing.offered_product_ids.map((id: unknown) => String(id))
+      : [];
+    if (listing.offered_product_id) {
+      listingOfferedIds.push(String(listing.offered_product_id));
+    }
+    if (offeredProductIds.some((id) => listingOfferedIds.includes(id))) {
       throw new BadRequestException('Cannot offer the exact listing product');
     }
-    await this.assertSwapProductOwnedAndActive(
-      userId,
-      offeredProductId,
-      'offeredProduct',
-      offeredQuantity,
-    );
+
+    for (const productId of offeredProductIds) {
+      await this.assertSwapProductOwnedAndActive(
+        userId,
+        productId,
+        'offeredProduct',
+        offeredQuantity,
+      );
+    }
 
     const { data: existingActiveProposal, error: existingActiveProposalError } =
       await this.serviceClient
@@ -10719,6 +11068,7 @@ export class SocialService {
         listing_id: listingId,
         proposer_id: userId,
         offered_product_id: offeredProductId,
+        offered_product_ids: offeredProductIds,
         offered_quantity: offeredQuantity,
         offered_value: offeredValue,
         cash_top_up: cashTopUp ?? 0,
@@ -10731,6 +11081,11 @@ export class SocialService {
       if (this.isSwapOfferedQuantityColumnMissing(error)) {
         throw new BadRequestException(
           'Exchange quantity migration is not applied. Please run migration 029 first.',
+        );
+      }
+      if (this.isSwapMultiOfferColumnMissing(error)) {
+        throw new BadRequestException(
+          'Multi-item exchange migration is not applied. Please run migration 035 first.',
         );
       }
       throw new BadRequestException(
@@ -10753,7 +11108,7 @@ export class SocialService {
     return mappedProposal ?? proposal;
   }
 
-  async acceptSwapProposal(userId: string, proposalId: string) {
+  async acceptSwapProposal(userId: string, proposalId: string, payload?: any) {
     const proposal = await this.getSwapProposalByIdOrThrow(proposalId);
     const listing = await this.getSwapListingByIdOrThrow(proposal.listing_id);
     if (listing.owner_id !== userId) {
@@ -10764,6 +11119,34 @@ export class SocialService {
     }
     if (proposal.status !== 'pending') {
       throw new BadRequestException('Proposal is not pending');
+    }
+
+    // The proposer may have offered several items; the listing owner accepts
+    // the ones they actually want. Omitting a selection accepts them all.
+    const offeredProductIds: string[] =
+      Array.isArray(proposal.offered_product_ids) &&
+      proposal.offered_product_ids.length
+        ? proposal.offered_product_ids.map((id: unknown) => String(id))
+        : proposal.offered_product_id
+          ? [String(proposal.offered_product_id)]
+          : [];
+    const selectedProductIds = this.normalizeSwapSelectedProductIds(
+      payload ?? {},
+      offeredProductIds,
+    );
+
+    if (selectedProductIds.length) {
+      const { error: selectionError } = await this.serviceClient
+        .from('social_swap_proposals')
+        .update({ selected_product_ids: selectedProductIds })
+        .eq('id', proposal.id);
+      // Tolerate the column being absent so accepting still works on a
+      // database where migration 035 has not been applied yet.
+      if (selectionError && !this.isSwapMultiOfferColumnMissing(selectionError)) {
+        throw new BadRequestException(
+          `Failed to record accepted items: ${selectionError.message}`,
+        );
+      }
     }
 
     const { data: acceptedRows, error: acceptError } =
@@ -10801,7 +11184,12 @@ export class SocialService {
       'swap_proposal_accepted',
       'Proposal accepted',
       'Your swap proposal was accepted.',
-      { listingId: listing.id, proposalId: proposal.id, transactionId },
+      {
+        listingId: listing.id,
+        proposalId: proposal.id,
+        transactionId,
+        selectedProductIds,
+      },
     );
 
     for (const declined of declinedProposals ?? []) {
@@ -10903,9 +11291,10 @@ export class SocialService {
     userId: string,
     proposalId: string,
     action: 'accept' | 'decline' | 'withdraw',
+    payload?: any,
   ) {
     if (action === 'accept') {
-      return this.acceptSwapProposal(userId, proposalId);
+      return this.acceptSwapProposal(userId, proposalId, payload);
     }
     if (action === 'decline') {
       return this.declineSwapProposal(userId, proposalId);
@@ -12498,7 +12887,16 @@ export class SocialService {
   async createSalesOrder(
     buyerId: string,
     payload: {
-      items?: Array<{ productId: string; quantity: number }>;
+      items?: Array<{
+        productId: string;
+        quantity: number;
+        // Variation the buyer chose on the product page.
+        size?: string;
+        sizeName?: string;
+        color?: string;
+        colorName?: string;
+        colorValue?: string;
+      }>;
       shippingAddress?: Record<string, unknown>;
       notes?: string;
     },
@@ -12537,6 +12935,16 @@ export class SocialService {
       total_price: number;
     }> = [];
 
+    // One product may appear as several lines (e.g. size 42 and size 43), so
+    // stock must be checked against the combined quantity, not per line.
+    const requestedByProduct = new Map<string, number>();
+    for (const item of items) {
+      requestedByProduct.set(
+        item.productId,
+        (requestedByProduct.get(item.productId) ?? 0) + item.quantity,
+      );
+    }
+
     for (const item of items) {
       const product = productsMap.get(item.productId);
       if (!product) throw new BadRequestException('Invalid product in order');
@@ -12545,7 +12953,10 @@ export class SocialService {
           `Product is not active: ${product.title}`,
         );
       }
-      if ((product.available_quantity ?? 0) < item.quantity) {
+      if (
+        (product.available_quantity ?? 0) <
+        (requestedByProduct.get(item.productId) ?? item.quantity)
+      ) {
         throw new BadRequestException(
           `Insufficient quantity for ${product.title}`,
         );
@@ -12567,6 +12978,18 @@ export class SocialService {
           sub_subcategory_id: product.sub_subcategory_id,
           condition: product.condition,
           image: null,
+          // What the buyer actually picked, so the seller ships the right one
+          // and the order page can display it.
+          variation:
+            item.size || item.color || item.colorValue
+              ? {
+                  size: item.size ?? null,
+                  size_name: item.sizeName ?? null,
+                  color: item.color ?? null,
+                  color_name: item.colorName ?? null,
+                  color_value: item.colorValue ?? null,
+                }
+              : null,
         },
         quantity: item.quantity,
         unit_price: unitPrice,
