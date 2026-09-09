@@ -70,7 +70,7 @@ export class RefundsController {
     return this.service.listOpenRequests();
   }
 
-  /** Seller/admin approves or rejects a refund request (approval triggers Iyzico). */
+  /** Seller/admin approves or rejects a refund request (approval triggers the payment gateway). */
   @Post('admin/requests/:id/decide')
   @AdminOnly()
   async decide(

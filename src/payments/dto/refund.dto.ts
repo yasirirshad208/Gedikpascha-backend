@@ -75,7 +75,7 @@ export class CancelTransactionDto {
 
 /**
  * Buyer-initiated request. For B2C this is the 14-day "cayma" (withdrawal).
- * Buyers cannot directly trigger an Iyzico refund — they open a request that
+ * Buyers cannot directly trigger an the payment gateway refund — they open a request that
  * a seller or admin approves.
  */
 export class CreateRefundRequestDto {

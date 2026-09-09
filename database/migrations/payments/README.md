@@ -25,3 +25,17 @@ Apply these in numeric order via Supabase SQL editor. Idempotent (`IF NOT EXISTS
 | 014 | `014_create_dispute_evidence.sql` | 6 | Seller-uploaded evidence for chargebacks. |
 | 015 | `015_payment_splits_add_item_payment_transaction_id.sql` | 3/6 | Track per-item Iyzico paymentTransactionId on each split. |
 | 016 | `016_create_dispute_evidence_storage_bucket.sql` | 6 | Supabase storage bucket for evidence uploads. |
+
+## Provider switch (Iyzico -> PayTR)
+
+Migrations 001-016 were written for Iyzico and are **already applied** to the
+live database, so their text is left as-is: it records what was actually run.
+The provider change is a forward migration instead.
+
+| # | File | Purpose |
+|---|---|---|
+| 017 | `017_switch_provider_to_paytr.sql` | Repoint the `provider` / `payment_provider` column defaults from `iyzico` to `paytr` and void the now-meaningless Iyzico sub-merchant keys. |
+
+`017` only changes defaults for **new** rows. Historical rows keep `iyzico`
+because those payments really were taken through Iyzico — rewriting them would
+falsify the payment audit trail.

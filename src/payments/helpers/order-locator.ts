@@ -18,7 +18,7 @@ export interface ResolvedOrder {
   total_amount: number;
   payment_status: string;
   status: string;
-  /** Each item carries enough to build the Iyzico basket + commission split. */
+  /** Each item carries enough to build the payment gateway basket + commission split. */
   items: ResolvedOrderItem[];
 }
 

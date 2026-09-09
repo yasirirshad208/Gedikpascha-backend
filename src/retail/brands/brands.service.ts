@@ -349,7 +349,7 @@ export class RetailBrandsService {
       );
     }
 
-    // Phase 2: approving a brand submits its sub-merchant draft to Iyzico.
+    // Phase 2: approving a brand submits its sub-merchant draft to the payment gateway.
     let payoutOnboarding: { attempted: boolean; ok: boolean; message?: string } = {
       attempted: false,
       ok: false,
@@ -367,7 +367,7 @@ export class RetailBrandsService {
   }
 
   /**
-   * Submit the retail brand's sub-merchant draft to Iyzico. Soft-fails so a
+   * Submit the retail brand's sub-merchant draft to the payment gateway. Soft-fails so a
    * payout problem never blocks brand approval; admins can retry.
    */
   private async tryOnboardSubMerchant(

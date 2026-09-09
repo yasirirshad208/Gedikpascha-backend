@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
-import { IyzicoConfig } from '../iyzico/iyzico.config';
+import { PaymentProviderConfig } from '../provider/payment-provider.config';
 import type { OrderScope } from '../dto/create-checkout.dto';
 
 export interface CommissionInputItem {
@@ -26,7 +26,7 @@ export interface CommissionResult {
  *   3. Scope rule: scope only
  *   4. Global: scope='global'
  *
- * Falls back to IyzicoConfig.defaultCommissionPercent if no row found.
+ * Falls back to PaymentProviderConfig.defaultCommissionPercent if no row found.
  * The Phase 1 seed plants a single global row at 10% so all lookups resolve correctly.
  */
 @Injectable()
@@ -35,7 +35,7 @@ export class CommissionCalculator {
 
   constructor(
     private readonly supabaseService: SupabaseService,
-    private readonly iyzicoConfig: IyzicoConfig,
+    private readonly paymentConfig: PaymentProviderConfig,
   ) {}
 
   async resolvePercentage(
@@ -55,13 +55,13 @@ export class CommissionCalculator {
 
     if (error) {
       this.logger.warn(
-        `commission_rules query failed (${error.message}); falling back to default ${this.iyzicoConfig.defaultCommissionPercent}%`,
+        `commission_rules query failed (${error.message}); falling back to default ${this.paymentConfig.defaultCommissionPercent}%`,
       );
-      return this.iyzicoConfig.defaultCommissionPercent;
+      return this.paymentConfig.defaultCommissionPercent;
     }
 
     if (!data || data.length === 0) {
-      return this.iyzicoConfig.defaultCommissionPercent;
+      return this.paymentConfig.defaultCommissionPercent;
     }
 
     // Pick the most specific match.
@@ -86,7 +86,7 @@ export class CommissionCalculator {
     const global = rows.find((r) => r.scope === 'global');
     if (global) return Number(global.percentage);
 
-    return this.iyzicoConfig.defaultCommissionPercent;
+    return this.paymentConfig.defaultCommissionPercent;
   }
 
   async calculate(scope: OrderScope, item: CommissionInputItem): Promise<CommissionResult> {

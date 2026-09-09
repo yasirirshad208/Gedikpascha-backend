@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { PayoutsService } from './payouts.service';
-import { IyzicoConfig } from '../iyzico/iyzico.config';
+import { PaymentProviderConfig } from '../provider/payment-provider.config';
 
 /**
  * Phase 7 — lightweight payout release scheduler.
@@ -15,7 +15,7 @@ import { IyzicoConfig } from '../iyzico/iyzico.config';
  * interval (default: every 6 hours) plus a short delay after boot. Admins can
  * also trigger a sweep on demand via POST /payments/payouts/admin/run-auto-release.
  *
- * Set IYZICO_AUTO_RELEASE_INTERVAL_MS to tune; set it to 0 to disable the timer
+ * Set PAYMENT_AUTO_RELEASE_INTERVAL_MS to tune; set it to 0 to disable the timer
  * entirely (e.g. when running the sweep from an external cron / job runner).
  */
 @Injectable()
@@ -26,22 +26,22 @@ export class PayoutScheduler implements OnModuleInit, OnModuleDestroy {
   private running = false;
 
   private readonly intervalMs =
-    Number(process.env.IYZICO_AUTO_RELEASE_INTERVAL_MS) || 6 * 60 * 60 * 1000;
+    Number(process.env.PAYMENT_AUTO_RELEASE_INTERVAL_MS) || 6 * 60 * 60 * 1000;
   private readonly bootDelayMs = 60 * 1000;
 
   constructor(
     private readonly payouts: PayoutsService,
-    private readonly config: IyzicoConfig,
+    private readonly config: PaymentProviderConfig,
   ) {}
 
   onModuleInit(): void {
     if (this.intervalMs <= 0) {
-      this.logger.log('Payout auto-release timer disabled (IYZICO_AUTO_RELEASE_INTERVAL_MS=0).');
+      this.logger.log('Payout auto-release timer disabled (PAYMENT_AUTO_RELEASE_INTERVAL_MS=0).');
       return;
     }
     if (!this.config.isReady()) {
       this.logger.warn(
-        'Payout auto-release timer not started: Iyzico is not configured (placeholder keys).',
+        'Payout auto-release timer not started: the payment gateway is not configured (placeholder keys).',
       );
       return;
     }

@@ -7,17 +7,17 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
-import { IyzicoService } from './iyzico/iyzico.service';
-import { IyzicoConfig } from './iyzico/iyzico.config';
+import { PaymentProviderService } from './provider/payment-provider.service';
+import { PaymentProviderConfig } from './provider/payment-provider.config';
 import { CommissionCalculator } from './helpers/commission.calculator';
 import { OrderLocator, ResolvedOrder, ResolvedOrderItem } from './helpers/order-locator';
 import { CreateCheckoutDto, OrderScope } from './dto/create-checkout.dto';
 import type {
   CheckoutFormItemTransaction,
   CreateCheckoutFormInitializeRequest,
-  IyzipayBasketItem,
+  PaymentBasketItem,
   RetrieveCheckoutFormResult,
-} from './iyzico/iyzico.types';
+} from './provider/payment-provider.types';
 
 /**
  * Multi-scope checkout orchestrator.
@@ -35,8 +35,8 @@ export class PaymentsService {
 
   constructor(
     private readonly supabaseService: SupabaseService,
-    private readonly iyzico: IyzicoService,
-    private readonly config: IyzicoConfig,
+    private readonly paymentProvider: PaymentProviderService,
+    private readonly config: PaymentProviderConfig,
     private readonly commissionCalculator: CommissionCalculator,
     private readonly orderLocator: OrderLocator,
   ) {}
@@ -87,7 +87,7 @@ export class PaymentsService {
         order_id: order.id,
         order_scope: dto.orderScope,
         user_id: order.user_id,
-        provider: 'iyzico',
+        provider: 'payment gateway',
         provider_conv_id: conversationId,
         status: 'init',
         amount: order.total_amount,
@@ -103,9 +103,9 @@ export class PaymentsService {
     const subMerchantByItem = await this.resolveSubMerchantsByItem(dto.orderScope, order.items);
 
     // 3. Build basket items.
-    const basketItems: IyzipayBasketItem[] = order.items.map((it) => {
+    const basketItems: PaymentBasketItem[] = order.items.map((it) => {
       const subKey = subMerchantByItem.get(it.id);
-      const base: IyzipayBasketItem = {
+      const base: PaymentBasketItem = {
         id: it.id,
         name: (it.product_name || 'Product').slice(0, 200),
         category1: (it.brand_name || 'General').slice(0, 60),
@@ -113,7 +113,7 @@ export class PaymentsService {
         price: Number(it.item_total).toFixed(2),
       };
       if (subKey) {
-        // Iyzico splits: subMerchantPrice = what the sub-merchant receives.
+        // the payment gateway splits: subMerchantPrice = what the sub-merchant receives.
         // Platform commission = item price - subMerchantPrice.
         // We pre-compute via CommissionCalculator below.
         base.subMerchantKey = subKey;
@@ -145,15 +145,15 @@ export class PaymentsService {
       }
     });
 
-    // 5. Build the Iyzico request.
+    // 5. Build the payment gateway request.
     const request: CreateCheckoutFormInitializeRequest = {
-      locale: this.iyzico.LOCALE.TR,
+      locale: this.paymentProvider.LOCALE.TR,
       conversationId,
       price: order.subtotal.toFixed(2),
       paidPrice: order.total_amount.toFixed(2),
-      currency: this.iyzico.CURRENCY[currency],
+      currency: this.paymentProvider.CURRENCY[currency],
       basketId: order.order_number,
-      paymentGroup: this.iyzico.PAYMENT_GROUP.PRODUCT,
+      paymentGroup: this.paymentProvider.PAYMENT_GROUP.PRODUCT,
       callbackUrl: this.config.callbackUrl,
       buyer: {
         id: order.user_id || `guest-${order.id}`,
@@ -175,7 +175,7 @@ export class PaymentsService {
 
     let result;
     try {
-      result = await this.iyzico.initializeCheckoutForm(request);
+      result = await this.paymentProvider.initializeCheckoutForm(request);
     } catch (err: unknown) {
       await supabase
         .from('payment_transactions')
@@ -219,8 +219,8 @@ export class PaymentsService {
     await supabase
       .from(order.ordersTable)
       .update({
-        payment_provider: 'iyzico',
-        payment_method: 'iyzico',
+        payment_provider: 'payment gateway',
+        payment_method: 'payment gateway',
         payment_transaction_id: tx.id,
         payment_intent_token: result.token || null,
         payment_status: result.status === 'success' ? 'pending' : 'failed',
@@ -275,7 +275,7 @@ export class PaymentsService {
         order_id: null,
         order_scope: 'swap',
         user_id: opts.payerUserId,
-        provider: 'iyzico',
+        provider: 'payment gateway',
         provider_conv_id: conversationId,
         status: 'init',
         amount: opts.amount,
@@ -295,7 +295,7 @@ export class PaymentsService {
     });
     const subMerchantPrice = opts.payeeSubMerchantKey ? commission.net : 0;
 
-    const basketItems: IyzipayBasketItem[] = [
+    const basketItems: PaymentBasketItem[] = [
       {
         id: opts.proposalId,
         name: 'Takas Fiyat Farkı',
@@ -312,13 +312,13 @@ export class PaymentsService {
     ];
 
     const request: CreateCheckoutFormInitializeRequest = {
-      locale: this.iyzico.LOCALE.TR,
+      locale: this.paymentProvider.LOCALE.TR,
       conversationId,
       price: opts.amount.toFixed(2),
       paidPrice: opts.amount.toFixed(2),
-      currency: this.iyzico.CURRENCY[currency],
+      currency: this.paymentProvider.CURRENCY[currency],
       basketId: `swap-${opts.proposalId}`,
-      paymentGroup: this.iyzico.PAYMENT_GROUP.PRODUCT,
+      paymentGroup: this.paymentProvider.PAYMENT_GROUP.PRODUCT,
       callbackUrl: this.config.callbackUrl,
       buyer: {
         id: opts.payerUserId,
@@ -336,7 +336,7 @@ export class PaymentsService {
 
     let result;
     try {
-      result = await this.iyzico.initializeCheckoutForm(request);
+      result = await this.paymentProvider.initializeCheckoutForm(request);
     } catch (err: unknown) {
       await supabase
         .from('payment_transactions')
@@ -415,8 +415,8 @@ export class PaymentsService {
 
     let result: RetrieveCheckoutFormResult;
     try {
-      result = await this.iyzico.retrieveCheckoutForm({
-        locale: this.iyzico.LOCALE.TR,
+      result = await this.paymentProvider.retrieveCheckoutForm({
+        locale: this.paymentProvider.LOCALE.TR,
         conversationId: tx.provider_conv_id,
         token,
       });
@@ -497,7 +497,7 @@ export class PaymentsService {
       .insert({
         event_id: opts.eventId || randomUUID(),
         event_type: opts.eventType,
-        provider: 'iyzico',
+        provider: 'payment gateway',
         provider_payment_id: opts.providerPaymentId || null,
         payload: opts.payload as unknown,
         signature: opts.signature || null,
@@ -609,7 +609,7 @@ export class PaymentsService {
 
   /**
    * Persist payment_splits from the plan stored at initialize-time, enriched with
-   * Iyzico's per-item paymentTransactionId and PSP fee.
+   * the payment gateway's per-item paymentTransactionId and PSP fee.
    */
   private async writeSplitsFromPlan(
     tx: Record<string, unknown>,
@@ -636,7 +636,12 @@ export class PaymentsService {
 
     const rows = plan.map((p) => {
       const it = itemTx.get(p.itemId);
-      const pspFee = it ? round2(Number(it.iyziCommissionFee ?? 0) + Number(it.iyziCommissionRateAmount ?? 0)) : 0;
+      const pspFee = it
+        ? round2(
+            Number(it.providerCommissionFee ?? 0) +
+              Number(it.providerCommissionRateAmount ?? 0),
+          )
+        : 0;
       const gross = it ? Number(it.price) : Number((p.commission + p.subMerchantPrice).toFixed(2));
       const net = round2(gross - p.commission - pspFee);
       return {

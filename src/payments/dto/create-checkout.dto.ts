@@ -22,7 +22,7 @@ export class CheckoutBuyerDto {
 
   /**
    * TC kimlik number for individuals. For B2B buyers send "11111111111".
-   * Required by Iyzico on every checkout (their validation, not ours).
+   * Required by the payment gateway on every checkout (their validation, not ours).
    */
   @IsString() @IsNotEmpty() identityNumber: string;
 }

@@ -6,8 +6,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
-import { IyzicoService } from '../iyzico/iyzico.service';
-import { IyzicoConfig } from '../iyzico/iyzico.config';
+import { PaymentProviderService } from '../provider/payment-provider.service';
+import { PaymentProviderConfig } from '../provider/payment-provider.config';
 import { OnboardSubMerchantDto, SubMerchantBrandScope } from '../dto/sub-merchant.dto';
 
 interface SubMerchantRow {
@@ -39,13 +39,13 @@ export class SubMerchantsService {
 
   constructor(
     private readonly supabaseService: SupabaseService,
-    private readonly iyzico: IyzicoService,
-    private readonly config: IyzicoConfig,
+    private readonly paymentProvider: PaymentProviderService,
+    private readonly config: PaymentProviderConfig,
   ) {}
 
   /**
    * Save (or overwrite) a draft sub-merchant for a brand or social seller.
-   * The actual call to Iyzico happens on `submit()` (driven by admin approval).
+   * The actual call to the payment gateway happens on `submit()` (driven by admin approval).
    */
   async upsertDraft(userId: string, dto: OnboardSubMerchantDto) {
     const supabase = this.supabaseService.getServiceClient();
@@ -123,7 +123,7 @@ export class SubMerchantsService {
   }
 
   /**
-   * Submit the draft to Iyzico. Idempotent: re-submitting an `active` row updates instead.
+   * Submit the draft to the payment gateway. Idempotent: re-submitting an `active` row updates instead.
    * Called from admin brand-approval and from the seller's "retry" button.
    */
   async submit(subMerchantId: string): Promise<{
@@ -142,7 +142,7 @@ export class SubMerchantsService {
 
     const conversationId = `gp-submerchant-${row.id}-${Date.now()}`;
     const reqBase = {
-      locale: this.iyzico.LOCALE.TR,
+      locale: this.paymentProvider.LOCALE.TR,
       conversationId,
       subMerchantType: row.sub_merchant_type as 'PERSONAL' | 'PRIVATE_COMPANY' | 'LIMITED_OR_JOINT_STOCK_COMPANY',
       address: row.address,
@@ -156,18 +156,18 @@ export class SubMerchantsService {
       taxOffice: row.tax_office || undefined,
       taxNumber: row.tax_number || undefined,
       legalCompanyTitle: row.legal_company_title || undefined,
-      currency: this.iyzico.CURRENCY[row.currency as 'TRY' | 'EUR' | 'USD' | 'GBP'] || this.iyzico.CURRENCY.TRY,
+      currency: this.paymentProvider.CURRENCY[row.currency as 'TRY' | 'EUR' | 'USD' | 'GBP'] || this.paymentProvider.CURRENCY.TRY,
     };
 
     let providerResp;
     try {
       if (row.sub_merchant_key) {
-        providerResp = await this.iyzico.updateSubMerchant({
+        providerResp = await this.paymentProvider.updateSubMerchant({
           ...reqBase,
           subMerchantKey: row.sub_merchant_key,
         });
       } else {
-        providerResp = await this.iyzico.createSubMerchant({
+        providerResp = await this.paymentProvider.createSubMerchant({
           ...reqBase,
           subMerchantExternalId: row.sub_merchant_external_id,
         });
@@ -179,7 +179,7 @@ export class SubMerchantsService {
         .update({ status: 'rejected', provider_raw: { error: String(err) } })
         .eq('id', row.id);
       await this.setBrandPayoutStatus(row, 'onboarding_failed');
-      throw new InternalServerErrorException('Iyzico sub-merchant call failed.');
+      throw new InternalServerErrorException('the payment gateway sub-merchant call failed.');
     }
 
     const isOk = providerResp.status === 'success';

@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
-import { IyzicoService } from './iyzico/iyzico.service';
-import { IyzicoConfig } from './iyzico/iyzico.config';
+import { PaymentProviderService } from './provider/payment-provider.service';
+import { PaymentProviderConfig } from './provider/payment-provider.config';
 import { CommissionCalculator } from './helpers/commission.calculator';
 import { OrderLocator } from './helpers/order-locator';
 import { SubMerchantsService } from './sub-merchants/sub-merchants.service';
@@ -22,8 +22,8 @@ import { PayoutScheduler } from './payouts/payout-scheduler.service';
   ],
   providers: [
     PaymentsService,
-    IyzicoService,
-    IyzicoConfig,
+    PaymentProviderService,
+    PaymentProviderConfig,
     CommissionCalculator,
     OrderLocator,
     SubMerchantsService,
@@ -33,8 +33,8 @@ import { PayoutScheduler } from './payouts/payout-scheduler.service';
   ],
   exports: [
     PaymentsService,
-    IyzicoService,
-    IyzicoConfig,
+    PaymentProviderService,
+    PaymentProviderConfig,
     CommissionCalculator,
     SubMerchantsService,
     RefundsService,

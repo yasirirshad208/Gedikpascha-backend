@@ -6,8 +6,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
-import { IyzicoService } from '../iyzico/iyzico.service';
-import { IyzicoConfig } from '../iyzico/iyzico.config';
+import { PaymentProviderService } from '../provider/payment-provider.service';
+import { PaymentProviderConfig } from '../provider/payment-provider.config';
 
 export type PayoutBrandScope =
   | 'wholesale_brand'
@@ -51,7 +51,7 @@ export interface BalanceSummary {
  * Money model (per split):
  *   gross      = price buyer paid for the item
  *   commission = platform's cut
- *   psp_fee    = Iyzico fee (passed through to seller)
+ *   psp_fee    = the payment gateway fee (passed through to seller)
  *   net        = gross - commission - psp_fee   (what the seller receives)
  *
  * payout_status lifecycle:
@@ -65,8 +65,8 @@ export class PayoutsService {
 
   constructor(
     private readonly supabaseService: SupabaseService,
-    private readonly iyzico: IyzicoService,
-    private readonly config: IyzicoConfig,
+    private readonly paymentProvider: PaymentProviderService,
+    private readonly config: PaymentProviderConfig,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -246,8 +246,8 @@ export class PayoutsService {
   }
 
   /**
-   * Approve (release) a split's funds to the sub-merchant via Iyzico.
-   * Calls Iyzico item-approve on the split's paymentTransactionId.
+   * Approve (release) a split's funds to the sub-merchant via the payment gateway.
+   * Calls the payment gateway item-approve on the split's paymentTransactionId.
    */
   async approve(splitId: string, adminId: string) {
     const supabase = this.supabaseService.getServiceClient();
@@ -277,22 +277,22 @@ export class PayoutsService {
       }
     }
     if (!split.provider_payment_tx_id) {
-      throw new BadRequestException('Split has no provider_payment_tx_id; cannot approve in Iyzico.');
+      throw new BadRequestException('Split has no provider_payment_tx_id; cannot approve in the payment gateway.');
     }
 
     const conv = await this.convIdForTransaction(split.transaction_id);
-    const result = await this.iyzico.approveItem({
-      locale: this.iyzico.LOCALE.TR,
+    const result = await this.paymentProvider.approveItem({
+      locale: this.paymentProvider.LOCALE.TR,
       conversationId: `${conv}-approve-${split.id}`,
       paymentTransactionId: split.provider_payment_tx_id,
     });
 
     if (result.status !== 'success') {
       this.logger.warn(
-        `Iyzico approve failed for split ${splitId}: ${result.errorMessage || result.errorCode}`,
+        `the payment gateway approve failed for split ${splitId}: ${result.errorMessage || result.errorCode}`,
       );
       throw new InternalServerErrorException(
-        result.errorMessage || 'Iyzico item approval failed.',
+        result.errorMessage || 'the payment gateway item approval failed.',
       );
     }
 

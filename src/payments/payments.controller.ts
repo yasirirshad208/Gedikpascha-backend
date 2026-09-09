@@ -14,14 +14,15 @@ import type { RawBodyRequest } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { PaymentsService } from './payments.service';
 import { CreateCheckoutDto } from './dto/create-checkout.dto';
-import { IyzicoConfig } from './iyzico/iyzico.config';
-import { verifyIyzicoSignature } from './iyzico/webhook-verifier';
+import { PaymentProviderConfig } from './provider/payment-provider.config';
+import { PaymentProviderService } from './provider/payment-provider.service';
 
 @Controller('payments')
 export class PaymentsController {
   constructor(
     private readonly paymentsService: PaymentsService,
-    private readonly config: IyzicoConfig,
+    private readonly config: PaymentProviderConfig,
+    private readonly paymentProvider: PaymentProviderService,
   ) {}
 
   /**
@@ -47,11 +48,11 @@ export class PaymentsController {
   }
 
   /**
-   * Iyzico redirects the buyer here after the Hosted Checkout Form completes.
+   * the payment gateway redirects the buyer here after the Hosted Checkout Form completes.
    * It POSTs `token` as application/x-www-form-urlencoded. We retrieve the
    * payment result, persist it, and redirect the buyer to /retail/checkout/{success|failure}.
    *
-   * Both GET and POST are exposed because Iyzico's docs use POST but tests
+   * Both GET and POST are exposed because the payment gateway's docs use POST but tests
    * sometimes hit GET. The GET path lets us re-process a callback for debugging.
    */
   @Post('callback')
@@ -68,44 +69,38 @@ export class PaymentsController {
 
   /**
    * POST /payments/webhook
-   * Iyzico signs webhooks with HMAC-SHA256 using the merchant webhook secret.
-   * We verify the signature, then idempotently log the event for the Phase-6
-   * handlers (refunds/chargebacks). Always returns 200 to avoid retry storms
-   * — the event row is the durable record.
+   *
+   * PayTR posts the payment result as form fields and signs it with a hash
+   * over merchant_oid + salt + status + total_amount. We verify that hash,
+   * then idempotently log the event. Always returns 200 so PayTR does not
+   * retry — the event row is the durable record.
    */
   @Post('webhook')
   @HttpCode(HttpStatus.OK)
-  async webhook(
-    @Req() req: RawBodyRequest<Request>,
-    @Headers('x-iyz-signature') sigHeader?: string,
-  ) {
-    const rawBody =
-      (req.rawBody && req.rawBody.toString('utf8')) ||
-      (req.body ? JSON.stringify(req.body) : '');
+  async webhook(@Req() req: RawBodyRequest<Request>) {
+    const payload = (req.body || {}) as Record<string, unknown>;
 
-    const verified = verifyIyzicoSignature({
-      rawBody,
-      signature: sigHeader,
-      secret: this.config.webhookSecret,
+    const merchantOid = String(payload.merchant_oid ?? '');
+    const status = String(payload.status ?? '');
+    const totalAmount = String(payload.total_amount ?? '');
+    const hash = String(payload.hash ?? '');
+
+    const verified = this.paymentProvider.verifyCallback({
+      merchantOid,
+      status,
+      totalAmount,
+      hash,
     });
 
-    const payload = (req.body || {}) as Record<string, unknown>;
-    const eventId =
-      (payload.eventId as string) ||
-      (payload.iyziEventId as string) ||
-      (payload.paymentId as string) ||
-      '';
-    const eventType =
-      (payload.eventType as string) ||
-      (payload.iyziEventType as string) ||
-      'UNKNOWN';
+    const eventId = merchantOid || String(payload.payment_id ?? '');
+    const eventType = status ? `payment.${status}` : 'UNKNOWN';
 
     await this.paymentsService.ingestWebhookEvent({
       eventId,
       eventType,
-      providerPaymentId: (payload.paymentId as string) || undefined,
+      providerPaymentId: merchantOid || undefined,
       payload,
-      signature: sigHeader,
+      signature: hash || undefined,
       verified,
     });
 

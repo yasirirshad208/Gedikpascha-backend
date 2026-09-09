@@ -7,8 +7,8 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { SupabaseService } from '../../supabase/supabase.service';
-import { IyzicoService } from '../iyzico/iyzico.service';
-import { IyzicoConfig } from '../iyzico/iyzico.config';
+import { PaymentProviderService } from '../provider/payment-provider.service';
+import { PaymentProviderConfig } from '../provider/payment-provider.config';
 import {
   CancelTransactionDto,
   CreateRefundRequestDto,
@@ -18,7 +18,7 @@ import {
   UploadDisputeEvidenceDto,
 } from '../dto/refund.dto';
 
-type IyzicoRefundReason = 'double_payment' | 'buyer_request' | 'fraud' | 'other';
+type GatewayRefundReason = 'double_payment' | 'buyer_request' | 'fraud' | 'other';
 
 interface PaymentTransactionRow {
   id: string;
@@ -52,10 +52,10 @@ interface PaymentSplitRow {
  * Phase 6 — Refunds, cancellations, 14-day withdrawals, chargeback evidence.
  *
  * Flows:
- *  - cancelTransaction  : before settlement; voids the whole payment (Iyzico cancel API).
- *  - refundTransaction  : after settlement; per-item refund (Iyzico refund API).
+ *  - cancelTransaction  : before settlement; voids the whole payment (the payment gateway cancel API).
+ *  - refundTransaction  : after settlement; per-item refund (the payment gateway refund API).
  *  - createRequest      : buyer opens a refund/withdrawal request (no money moves yet).
- *  - decideRequest      : seller/admin approves -> triggers the actual Iyzico refund.
+ *  - decideRequest      : seller/admin approves -> triggers the actual the payment gateway refund.
  *  - uploadEvidence     : seller submits chargeback dispute documents.
  */
 @Injectable()
@@ -64,8 +64,8 @@ export class RefundsService {
 
   constructor(
     private readonly supabaseService: SupabaseService,
-    private readonly iyzico: IyzicoService,
-    private readonly config: IyzicoConfig,
+    private readonly paymentProvider: PaymentProviderService,
+    private readonly config: PaymentProviderConfig,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ export class RefundsService {
 
   /**
    * Cancel an entire payment before settlement (full void, refund to buyer).
-   * Only valid while Iyzico still allows cancel (typically same-day, pre-settlement).
+   * Only valid while the payment gateway still allows cancel (typically same-day, pre-settlement).
    */
   async cancelTransaction(transactionId: string, dto: CancelTransactionDto) {
     const supabase = this.supabaseService.getServiceClient();
@@ -86,11 +86,11 @@ export class RefundsService {
       );
     }
     if (!tx.provider_payment_id) {
-      throw new BadRequestException('Transaction has no Iyzico paymentId; cannot cancel.');
+      throw new BadRequestException('Transaction has no the payment gateway paymentId; cannot cancel.');
     }
 
-    const result = await this.iyzico.cancelPayment({
-      locale: this.iyzico.LOCALE.TR,
+    const result = await this.paymentProvider.cancelPayment({
+      locale: this.paymentProvider.LOCALE.TR,
       conversationId: `${tx.provider_conv_id}-cancel`,
       paymentId: tx.provider_payment_id,
       ip: tx.buyer_ip || '127.0.0.1',
@@ -100,10 +100,10 @@ export class RefundsService {
 
     if (result.status !== 'success') {
       this.logger.warn(
-        `Iyzico cancel failed for tx ${transactionId}: ${result.errorMessage || result.errorCode}`,
+        `the payment gateway cancel failed for tx ${transactionId}: ${result.errorMessage || result.errorCode}`,
       );
       throw new InternalServerErrorException(
-        result.errorMessage || 'Iyzico cancellation failed.',
+        result.errorMessage || 'the payment gateway cancellation failed.',
       );
     }
 
@@ -131,7 +131,7 @@ export class RefundsService {
   // ---------------------------------------------------------------------------
 
   /**
-   * Refund a transaction after settlement. Iyzico refunds happen per
+   * Refund a transaction after settlement. the payment gateway refunds happen per
    * paymentTransactionId (i.e. per split). PSP fee is passed through to the
    * seller (deducted from their balance) per client policy.
    */
@@ -196,8 +196,8 @@ export class RefundsService {
         continue;
       }
 
-      const result = await this.iyzico.refundItem({
-        locale: this.iyzico.LOCALE.TR,
+      const result = await this.paymentProvider.refundItem({
+        locale: this.paymentProvider.LOCALE.TR,
         conversationId: `${tx.provider_conv_id}-refund-${split.id}`,
         paymentTransactionId: split.provider_payment_tx_id,
         price: refundAmount.toFixed(2),
@@ -209,7 +209,7 @@ export class RefundsService {
 
       if (result.status !== 'success') {
         this.logger.warn(
-          `Iyzico refund failed for split ${split.id}: ${result.errorMessage || result.errorCode}`,
+          `the payment gateway refund failed for split ${split.id}: ${result.errorMessage || result.errorCode}`,
         );
         results.push({
           splitId: split.id,
@@ -267,7 +267,7 @@ export class RefundsService {
     dto: RefundTransactionDto,
   ): Promise<never> {
     // For single main-merchant payments we still need a paymentTransactionId.
-    // Iyzico exposes it on the retrieve result's itemTransactions; if we never
+    // the payment gateway exposes it on the retrieve result's itemTransactions; if we never
     // stored splits, fall back to cancel for full amounts.
     const amount = dto.amount ?? (tx.paid_price ?? tx.amount) - (tx.refunded_amount || 0);
     throw new BadRequestException(
@@ -355,7 +355,7 @@ export class RefundsService {
   }
 
   /**
-   * Seller/admin decides on a request. Approval triggers the real Iyzico refund.
+   * Seller/admin decides on a request. Approval triggers the real the payment gateway refund.
    */
   async decideRequest(requestId: string, deciderId: string, dto: DecideRefundRequestDto) {
     const supabase = this.supabaseService.getServiceClient();
@@ -533,7 +533,7 @@ export class RefundsService {
     throw new BadRequestException(`No order table for scope ${scope}.`);
   }
 
-  private mapReason(reason: RefundReason): IyzicoRefundReason {
+  private mapReason(reason: RefundReason): GatewayRefundReason {
     switch (reason) {
       case 'double_payment':
         return 'double_payment';

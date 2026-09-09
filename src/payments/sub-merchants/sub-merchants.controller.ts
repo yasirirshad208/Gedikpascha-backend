@@ -39,7 +39,7 @@ export class SubMerchantsController {
     return this.service.upsertDraft(user.id, dto);
   }
 
-  /** Seller submits their draft to Iyzico (or retries after a failed submission). */
+  /** Seller submits their draft to the payment gateway (or retries after a failed submission). */
   @Post('me/submit')
   async submitMine(@Headers('authorization') authHeader: string) {
     const user = await this.authenticatedUser(authHeader);
@@ -57,7 +57,7 @@ export class SubMerchantsController {
     return this.service.getMine(user.id);
   }
 
-  /** Admin retries a failed Iyzico submission for any sub-merchant. */
+  /** Admin retries a failed the payment gateway submission for any sub-merchant. */
   @Post('admin/:id/submit')
   @AdminOnly()
   async adminSubmit(@Param('id') id: string) {
