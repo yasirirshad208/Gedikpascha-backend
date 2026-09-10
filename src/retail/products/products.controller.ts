@@ -261,6 +261,9 @@ export class RetailProductsController {
         value?: string;
         isAvailable?: boolean;
         displayOrder?: number;
+        // 0-based indices into `images`; the gallery shows these when the
+        // variation is selected.
+        imageIndices?: number[] | null;
       }>;
     },
   ) {

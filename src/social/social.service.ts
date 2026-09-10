@@ -235,9 +235,93 @@ interface UserProfileRow {
   bio: string | null;
 }
 
+/**
+ * Sanitises a colour option's image link.
+ *
+ * These indices address the product's media by position, so anything that is
+ * not a non-negative integer would render as a blank gallery slide. Returns
+ * undefined rather than an empty array so the stored JSON stays clean and reads
+ * as "no link".
+ */
+export function sanitizeVariationImageIndices(
+  raw: unknown,
+): number[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+
+  // Only real numbers and digit strings count. Number() would turn null, '',
+  // false and [] into 0 — a valid-looking index that would silently link the
+  // product's first photo to a colour the seller never linked.
+  const toIndex = (entry: unknown): number | null => {
+    if (typeof entry === 'number') return entry;
+    if (typeof entry === 'string' && /^\d+$/.test(entry.trim())) {
+      return Number(entry.trim());
+    }
+    return null;
+  };
+
+  const cleaned = [
+    ...new Set(
+      raw
+        .map(toIndex)
+        .filter(
+          (entry): entry is number =>
+            entry !== null && Number.isInteger(entry) && entry >= 0,
+        ),
+    ),
+  ].sort((a, b) => a - b);
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+/**
+ * Collapses the colours gathered from a source product's variations into the
+ * `variation_options` written on an imported social listing.
+ *
+ * The same colour can appear at both product level and pack level, and only one
+ * of those rows may carry an image link — so a duplicate label adopts the link
+ * rather than the mapping being lost. Labels are deduped case-sensitively to
+ * match the source catalogue's own naming.
+ */
+export function mergeSocialColorOptions(
+  colors: Array<{ label: string; value: string; imageIndices?: number[] }>,
+): Array<{ label: string; value: string; imageIndices?: number[] }> {
+  const byLabel = new Map<string, { value: string; imageIndices?: number[] }>();
+
+  for (const colour of colors) {
+    const label = String(colour.label ?? '').trim();
+    if (!label) continue;
+    const value = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(colour.value || '')
+      ? colour.value.toLowerCase()
+      : '#000000';
+    const imageIndices = sanitizeVariationImageIndices(colour.imageIndices);
+
+    const existing = byLabel.get(label);
+    if (existing) {
+      if (!existing.imageIndices && imageIndices) {
+        existing.imageIndices = imageIndices;
+      }
+      continue;
+    }
+    byLabel.set(label, { value, imageIndices });
+  }
+
+  return [...byLabel.entries()].map(([label, entry]) =>
+    entry.imageIndices
+      ? { label, value: entry.value, imageIndices: entry.imageIndices }
+      : { label, value: entry.value },
+  );
+}
+
 interface NormalizedVariationColorOption {
   label: string;
   value: string;
+  /**
+   * 0-based indices into the product's media (ordered by display_order) that
+   * show this colour. The product page narrows the gallery to these when the
+   * colour is picked. Absent/empty means "show every image".
+   *
+   * Lives inside variation_options JSONB, so no schema change is needed.
+   */
+  imageIndices?: number[];
 }
 
 interface NormalizedProductVariation {
@@ -863,7 +947,12 @@ export class SocialService {
       const colorOptions: NormalizedVariationColorOption[] = rawOptions
         .map((option): NormalizedVariationColorOption | null => {
           if (!option || typeof option !== 'object') return null;
-          const objectOption = option as { label?: unknown; value?: unknown };
+          const objectOption = option as {
+            label?: unknown;
+            value?: unknown;
+            imageIndices?: unknown;
+            image_indices?: unknown;
+          };
           const label = String(objectOption.label ?? '').trim();
           const value = String(objectOption.value ?? '')
             .trim()
@@ -871,7 +960,12 @@ export class SocialService {
           if (!label || !/^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(value)) {
             return null;
           }
-          return { label, value };
+          const imageIndices = sanitizeVariationImageIndices(
+            objectOption.imageIndices ?? objectOption.image_indices,
+          );
+          return imageIndices
+            ? { label, value, imageIndices }
+            : { label, value };
         })
         .filter(
           (option): option is NormalizedVariationColorOption => option !== null,
@@ -7784,18 +7878,34 @@ export class SocialService {
 
     // Copy size/colour variations so buyers can pick a size on the product page.
     const sizes: string[] = [];
-    const colors: Array<{ label: string; value: string }> = [];
+    const colors: Array<{ label: string; value: string; imageIndices?: number[] }> = [];
     if (payload?.packSizeId) {
       const { data: packVars } = await this.serviceClient
         .from('wholesale_pack_variations')
-        .select('color, color_value, size, variation_type, name, value')
+        .select(
+          'color, color_value, size, variation_type, name, value, image_index, image_indices',
+        )
         .eq('pack_size_id', payload.packSizeId);
       (packVars || []).forEach((v: any) => {
         if (v.size) sizes.push(v.size);
         else if (v.variation_type === 'size' && v.name) sizes.push(v.name);
-        if (v.color) colors.push({ label: v.color, value: v.color_value || '#000000' });
+        // Media is copied in wholesale display_order below, so these 0-based
+        // indices address the same photos on the social listing.
+        const imageIndices = sanitizeVariationImageIndices(
+          v.image_indices ?? (v.image_index != null ? [v.image_index] : null),
+        );
+        if (v.color)
+          colors.push({
+            label: v.color,
+            value: v.color_value || '#000000',
+            imageIndices,
+          });
         else if (v.variation_type === 'color' && v.name)
-          colors.push({ label: v.name, value: v.value || '#000000' });
+          colors.push({
+            label: v.name,
+            value: v.value || '#000000',
+            imageIndices,
+          });
       });
     }
     const { data: prodVars } = await this.serviceClient
@@ -7820,7 +7930,11 @@ export class SocialService {
   private async insertSocialSizeColorVariations(
     socialProductId: string,
     sizes: string[],
-    colors: Array<{ label: string; value: string }>,
+    colors: Array<{
+      label: string;
+      value: string;
+      imageIndices?: number[];
+    }>,
   ) {
     const rows: any[] = [];
     let order = 0;
@@ -7839,25 +7953,14 @@ export class SocialService {
       });
     }
 
-    const colorMap = new Map<string, string>();
-    colors.forEach((c) => {
-      const label = String(c.label ?? '').trim();
-      if (!label || colorMap.has(label)) return;
-      const value = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c.value || '')
-        ? c.value.toLowerCase()
-        : '#000000';
-      colorMap.set(label, value);
-    });
-    if (colorMap.size) {
+    const colorOptions = mergeSocialColorOptions(colors);
+    if (colorOptions.length) {
       rows.push({
         product_id: socialProductId,
         variation_name: 'Color',
         variation_type: 'color',
-        variation_values: [...colorMap.values()],
-        variation_options: [...colorMap.entries()].map(([label, value]) => ({
-          label,
-          value,
-        })),
+        variation_values: colorOptions.map((option) => option.value),
+        variation_options: colorOptions,
         display_order: order++,
       });
     }
@@ -7988,16 +8091,20 @@ export class SocialService {
 
     // Copy size/colour variations from the retail product so buyers can pick a size.
     const sizes: string[] = [];
-    const colors: Array<{ label: string; value: string }> = [];
+    const colors: Array<{ label: string; value: string; imageIndices?: number[] }> = [];
     const { data: retailVars } = await this.serviceClient
       .from('retail_product_variations')
-      .select('variation_type, name, value')
+      .select('variation_type, name, value, image_indices')
       .eq('product_id', product.id);
     (retailVars || []).forEach((v: any) => {
       const type = String(v.variation_type || '').toLowerCase();
       if (type === 'size' && v.name) sizes.push(v.name);
       else if (type === 'color' && v.name)
-        colors.push({ label: v.name, value: v.value || '#000000' });
+        colors.push({
+          label: v.name,
+          value: v.value || '#000000',
+          imageIndices: sanitizeVariationImageIndices(v.image_indices),
+        });
     });
     await this.insertSocialSizeColorVariations(created.id, sizes, colors);
 

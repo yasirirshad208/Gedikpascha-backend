@@ -258,7 +258,9 @@ export class RetailProductsService {
         .order('display_order', { ascending: true }),
       supabase
         .from('retail_product_variations')
-        .select('id, variation_type, name, value, is_available, display_order')
+        .select(
+          'id, variation_type, name, value, is_available, display_order, image_indices',
+        )
         .eq('product_id', productId)
         .order('display_order', { ascending: true }),
     ]);
@@ -302,6 +304,8 @@ export class RetailProductsService {
         value?: string;
         isAvailable?: boolean;
         displayOrder?: number;
+        // 0-based indices into `images` (display_order). Empty = show all.
+        imageIndices?: number[] | null;
       }>;
     },
   ) {
@@ -552,6 +556,17 @@ export class RetailProductsService {
         .eq('product_id', productId);
 
       if (updateData.variations.length > 0) {
+        let imageCount = updateData.images?.length ?? null;
+        if (imageCount == null) {
+          // Variations saved without touching images: bound the indices against
+          // what is actually stored, so a link to a since-deleted photo cannot
+          // survive.
+          const { count } = await supabase
+            .from('retail_product_images')
+            .select('id', { count: 'exact', head: true })
+            .eq('product_id', productId);
+          imageCount = count ?? null;
+        }
         const variationRecords = updateData.variations.map((v, index) => ({
           product_id: productId,
           variation_type: v.variationType,
@@ -559,6 +574,10 @@ export class RetailProductsService {
           value: v.value || null,
           is_available: v.isAvailable ?? true,
           display_order: v.displayOrder ?? index,
+          // Drop indices that no longer point at an image (the seller may have
+          // deleted a photo in the same save), so the gallery never resolves to
+          // a blank slide.
+          image_indices: normalizeImageIndices(v.imageIndices, imageCount),
         }));
         const { error: variationsError } = await supabase
           .from('retail_product_variations')
@@ -1220,7 +1239,7 @@ export class RetailProductsService {
         *,
         retail_brands!inner(id, brand_name, display_name, logo_url, status, description),
         retail_product_images(id, image_url, display_order, is_primary),
-        retail_product_variations(id, variation_type, name, value, is_available, display_order),
+        retail_product_variations(id, variation_type, name, value, is_available, display_order, image_indices),
         retail_product_inventory(id, combination_key, stock_quantity)
       `,
       )
@@ -1229,7 +1248,16 @@ export class RetailProductsService {
       .eq('retail_brands.status', 'approved')
       .is('deleted_at', null);
 
-    if (error || !products || products.length === 0) {
+    // A failed query is not a missing product. Collapsing the two hides real
+    // faults — a missing column (Postgres 42703) would surface to every shopper
+    // as "Product not found" on a product that exists.
+    if (error) {
+      console.error('Failed to load retail product by slug:', slug, error);
+      throw new BadRequestException(
+        `Failed to load product: ${error.message || 'Unknown error'}`,
+      );
+    }
+    if (!products || products.length === 0) {
       throw new NotFoundException('Product not found');
     }
 
@@ -1267,7 +1295,7 @@ export class RetailProductsService {
         sale_percentage,
         retail_brands!inner(display_name, status),
         retail_product_images(image_url, is_primary),
-        retail_product_variations(id, variation_type, name, value, is_available, display_order)
+        retail_product_variations(id, variation_type, name, value, is_available, display_order, image_indices)
       `,
       )
       .eq('status', 'active')
@@ -1943,50 +1971,35 @@ export class RetailProductsService {
     }
 
     // Copy product-level variations, then the chosen pack's variations.
-    const variationRecords: any[] = [];
-    const seenVariations = new Set<string>();
-
+    //
+    // Images above were inserted in wholesale display_order, so a wholesale
+    // variation's 0-based image_indices address the same photos in the new
+    // retail listing and can be carried over verbatim. Only pack variations
+    // carry an image link (wholesale_product_variations has no such column).
     const { data: productVariations } = await supabase
       .from('wholesale_product_variations')
       .select('variation_type, name, value, is_available, display_order')
       .eq('product_id', product.id)
       .order('display_order', { ascending: true });
 
-    (productVariations || []).forEach((v) => {
-      const key = `${v.variation_type}:${v.name}`;
-      if (seenVariations.has(key)) return;
-      seenVariations.add(key);
-      variationRecords.push({
-        product_id: retailProduct.id,
-        variation_type: v.variation_type,
-        name: v.name,
-        value: v.value || null,
-        is_available: v.is_available ?? true,
-        display_order: v.display_order ?? 0,
-      });
-    });
-
+    let packVariations: any[] | null = null;
     if (chosenPackSizeId) {
-      const { data: packVariations } = await supabase
+      const { data } = await supabase
         .from('wholesale_pack_variations')
-        .select('variation_type, name, value, is_available, display_order')
+        .select(
+          'variation_type, name, value, is_available, display_order, image_index, image_indices',
+        )
         .eq('pack_size_id', chosenPackSizeId)
         .order('display_order', { ascending: true });
-
-      (packVariations || []).forEach((v) => {
-        const key = `${v.variation_type}:${v.name}`;
-        if (seenVariations.has(key)) return;
-        seenVariations.add(key);
-        variationRecords.push({
-          product_id: retailProduct.id,
-          variation_type: v.variation_type,
-          name: v.name,
-          value: v.value || null,
-          is_available: v.is_available ?? true,
-          display_order: v.display_order ?? 0,
-        });
-      });
+      packVariations = data;
     }
+
+    const variationRecords = buildImportedVariationRecords({
+      retailProductId: retailProduct.id,
+      productVariations: productVariations || [],
+      packVariations: packVariations || [],
+      copiedImageCount: images?.length ?? 0,
+    });
 
     if (variationRecords.length > 0) {
       const { error: variationsError } = await supabase
@@ -2038,6 +2051,125 @@ export class RetailProductsService {
     clearCache('categories:');
     return this.getProductById(retailProduct.id, userId);
   }
+}
+
+export interface WholesaleVariationSource {
+  variation_type: string;
+  name: string;
+  value?: string | null;
+  is_available?: boolean | null;
+  display_order?: number | null;
+  image_index?: number | null;
+  image_indices?: number[] | null;
+}
+
+export interface RetailVariationRecord {
+  product_id: string;
+  variation_type: string;
+  name: string;
+  value: string | null;
+  is_available: boolean;
+  display_order: number;
+  image_indices: number[] | null;
+}
+
+/**
+ * Merges a wholesale product's variations with the chosen pack's variations
+ * into the rows written to retail_product_variations on import.
+ *
+ * Images are copied in wholesale display_order, so a wholesale variation's
+ * 0-based image_indices address the same photos in the new retail listing and
+ * carry over unchanged. Only pack variations carry an image link —
+ * wholesale_product_variations has no such column — so when the same
+ * type:name appears at both levels the product-level row (which owns
+ * display_order) adopts the pack's images instead of the mapping being lost.
+ */
+export function buildImportedVariationRecords(input: {
+  retailProductId: string;
+  productVariations: WholesaleVariationSource[];
+  packVariations: WholesaleVariationSource[];
+  copiedImageCount: number;
+}): RetailVariationRecord[] {
+  const { retailProductId, productVariations, packVariations, copiedImageCount } =
+    input;
+
+  const records: RetailVariationRecord[] = [];
+  const indexByKey = new Map<string, number>();
+  const keyOf = (v: WholesaleVariationSource) =>
+    `${v.variation_type}:${v.name}`;
+
+  for (const v of productVariations) {
+    const key = keyOf(v);
+    if (indexByKey.has(key)) continue;
+    indexByKey.set(key, records.length);
+    records.push({
+      product_id: retailProductId,
+      variation_type: v.variation_type,
+      name: v.name,
+      value: v.value || null,
+      is_available: v.is_available ?? true,
+      display_order: v.display_order ?? 0,
+      image_indices: null,
+    });
+  }
+
+  for (const v of packVariations) {
+    const key = keyOf(v);
+    const linkedImages = normalizeImageIndices(
+      v.image_indices ?? (v.image_index != null ? [v.image_index] : null),
+      copiedImageCount,
+    );
+
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex !== undefined) {
+      const existing = records[existingIndex];
+      if (!existing.image_indices && linkedImages) {
+        existing.image_indices = linkedImages;
+      }
+      continue;
+    }
+
+    indexByKey.set(key, records.length);
+    records.push({
+      product_id: retailProductId,
+      variation_type: v.variation_type,
+      name: v.name,
+      value: v.value || null,
+      is_available: v.is_available ?? true,
+      display_order: v.display_order ?? 0,
+      image_indices: linkedImages,
+    });
+  }
+
+  return records;
+}
+
+/**
+ * Sanitises a variation's image links before they are written.
+ *
+ * `image_indices` are 0-based positions into the product's images, so a stale
+ * index (photo deleted, or a wholesale mapping that points past the images
+ * actually copied) would render as a blank gallery slide. Returns null rather
+ * than an empty array so the column reads as "no link, show every image".
+ */
+export function normalizeImageIndices(
+  indices: number[] | null | undefined,
+  imageCount: number | null,
+): number[] | null {
+  if (!Array.isArray(indices) || indices.length === 0) return null;
+
+  const cleaned = [
+    ...new Set(
+      indices.filter(
+        (i) =>
+          Number.isInteger(i) &&
+          i >= 0 &&
+          (imageCount == null || i < imageCount),
+      ),
+    ),
+  ].sort((a, b) => a - b);
+
+  return cleaned.length > 0 ? cleaned : null;
 }
 
 /**
