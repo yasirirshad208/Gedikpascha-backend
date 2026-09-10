@@ -2,46 +2,95 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
 import { cached, TTL } from '../../common/cache.util';
 
+/** Marketplace a shopper-facing category menu belongs to. */
+export type ProductScope = 'wholesale' | 'retail' | 'social';
+
+export const PRODUCT_SCOPES: ProductScope[] = [
+  'wholesale',
+  'retail',
+  'social',
+];
+
 @Injectable()
 export class PublicCategoriesService {
   constructor(private readonly supabaseService: SupabaseService) {}
 
   /**
-   * Returns the set of category IDs that currently have at least one publicly
-   * visible (active) product in ANY of the three marketplaces (wholesale,
-   * retail, social). Used to hide empty categories from shopper-facing menus
-   * without touching `is_active` (so sellers can still list into them).
+   * Category ids that currently have at least one publicly visible product,
+   * grouped by marketplace.
+   *
+   * Kept per-marketplace rather than as one union: the wholesale menu links to
+   * /wholesale/products, so a category whose only products are retail or social
+   * listings is a dead end there. Shoppers reported exactly that — picking such
+   * a category and landing on a page with nothing of theirs in it.
+   *
+   * `is_active` is deliberately untouched, so sellers can still list into a
+   * category that no shopper menu currently shows.
    */
-  private async getCategoryIdsWithActiveProducts(): Promise<Set<string>> {
-    // Cached: these are 3 full-table scans; without caching they run on every
-    // homepage/shop load and were a major source of Supabase egress.
-    const ids = await cached('categories:product-ids', TTL.long, async () => {
-      const serviceClient = this.supabaseService.getServiceClient();
-      const set = new Set<string>();
-      const [wholesale, retail, social] = await Promise.all([
-        serviceClient.from('active_wholesale_products').select('category_id'),
-        serviceClient
-          .from('retail_products')
-          .select('category_id')
-          .eq('status', 'active')
-          .is('deleted_at', null),
-        serviceClient
-          .from('social_products')
-          .select('category_id')
-          .eq('status', 'active'),
-      ]);
-      [wholesale.data, retail.data, social.data].forEach((rows) => {
-        (rows || []).forEach((row: any) => {
-          if (row.category_id) set.add(row.category_id);
-        });
-      });
-      return [...set];
-    });
-    return new Set(ids);
+  private async getCategoryIdsByScope(): Promise<
+    Record<ProductScope, Set<string>>
+  > {
+    // Cached: these are three full-table scans that would otherwise run on
+    // every homepage/shop load, and were a major source of Supabase egress.
+    const grouped = await cached(
+      'categories:product-ids-by-scope',
+      TTL.long,
+      async () => {
+        const serviceClient = this.supabaseService.getServiceClient();
+        const [wholesale, retail, social] = await Promise.all([
+          serviceClient.from('active_wholesale_products').select('category_id'),
+          serviceClient
+            .from('retail_products')
+            .select('category_id')
+            .eq('status', 'active')
+            .is('deleted_at', null),
+          serviceClient
+            .from('social_products')
+            .select('category_id')
+            .eq('status', 'active'),
+        ]);
+
+        const collect = (rows: any[] | null) => [
+          ...new Set(
+            (rows || [])
+              .map((row: any) => row.category_id)
+              .filter((id: unknown): id is string => Boolean(id)),
+          ),
+        ];
+
+        return {
+          wholesale: collect(wholesale.data),
+          retail: collect(retail.data),
+          social: collect(social.data),
+        };
+      },
+    );
+
+    return {
+      wholesale: new Set(grouped.wholesale),
+      retail: new Set(grouped.retail),
+      social: new Set(grouped.social),
+    };
   }
 
-  async getAllCategoriesWithSubcategories() {
-   return cached('categories:all-with-subs', TTL.medium, async () => {
+  /**
+   * Which categories a given menu should show. Without a scope the union is
+   * used, which suits a mixed surface such as global search.
+   */
+  private async getVisibleCategoryIds(
+    scope?: ProductScope,
+  ): Promise<Set<string>> {
+    const byScope = await this.getCategoryIdsByScope();
+    if (scope) return byScope[scope];
+    return new Set([
+      ...byScope.wholesale,
+      ...byScope.retail,
+      ...byScope.social,
+    ]);
+  }
+
+  async getAllCategoriesWithSubcategories(scope?: ProductScope) {
+   return cached(`categories:all-with-subs:${scope || 'any'}`, TTL.medium, async () => {
     const serviceClient = this.supabaseService.getServiceClient();
 
     // Fetch all active categories
@@ -58,10 +107,10 @@ export class PublicCategoriesService {
       );
     }
 
-    // Keep only categories that currently have products (in any section).
-    const categoryIdsWithProducts = await this.getCategoryIdsWithActiveProducts();
+    // Keep only categories a shopper on this surface can actually browse.
+    const visibleCategoryIds = await this.getVisibleCategoryIds(scope);
     const visibleCategories = (categories || []).filter((cat: any) =>
-      categoryIdsWithProducts.has(cat.id),
+      visibleCategoryIds.has(cat.id),
     );
 
     // Fetch all active subcategories
