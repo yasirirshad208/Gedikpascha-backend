@@ -345,12 +345,11 @@ export class RetailProductsService {
         altText?: string;
         isPrimary?: boolean;
       }>;
+      // Only the image links and availability of EXISTING variations can be
+      // changed; the set itself comes from the wholesale purchase.
       variations?: Array<{
-        variationType: string;
-        name: string;
-        value?: string;
+        id?: string;
         isAvailable?: boolean;
-        displayOrder?: number;
         // 0-based indices into `images` (display_order). Empty = show all.
         imageIndices?: number[] | null;
       }>;
@@ -595,49 +594,57 @@ export class RetailProductsService {
       }
     }
 
-    // Replace variations if provided (full set).
+    // Variations are NOT editable by the retailer.
+    //
+    // A retail listing's colours and sizes are exactly what was bought from
+    // wholesale, so the only thing a save may change here is which photos each
+    // variation shows (and whether it is temporarily unavailable). Rows are
+    // matched by id and updated in place — nothing is inserted or deleted, so a
+    // crafted request cannot invent a colour the retailer never purchased.
     if (updateData.variations !== undefined) {
-      await supabase
+      const { data: owned } = await supabase
         .from('retail_product_variations')
-        .delete()
+        .select('id')
         .eq('product_id', productId);
+      const ownedIds = new Set((owned || []).map((row: any) => row.id));
 
-      if (updateData.variations.length > 0) {
-        let imageCount = updateData.images?.length ?? null;
-        if (imageCount == null) {
-          // Variations saved without touching images: bound the indices against
-          // what is actually stored, so a link to a since-deleted photo cannot
-          // survive.
-          const { count } = await supabase
-            .from('retail_product_images')
-            .select('id', { count: 'exact', head: true })
-            .eq('product_id', productId);
-          imageCount = count ?? null;
-        }
-        const hasImageColumn = await this.hasVariationImageColumn(supabase);
-        const variationRecords = updateData.variations.map((v, index) => ({
-          product_id: productId,
-          variation_type: v.variationType,
-          name: v.name,
-          value: v.value || null,
+      let imageCount = updateData.images?.length ?? null;
+      if (imageCount == null) {
+        // Variations saved without touching images: bound the indices against
+        // what is actually stored, so a link to a since-deleted photo cannot
+        // survive.
+        const { count } = await supabase
+          .from('retail_product_images')
+          .select('id', { count: 'exact', head: true })
+          .eq('product_id', productId);
+        imageCount = count ?? null;
+      }
+      const hasImageColumn = await this.hasVariationImageColumn(supabase);
+
+      for (const v of updateData.variations) {
+        if (!v.id || !ownedIds.has(v.id)) continue;
+
+        const patch: Record<string, any> = {
           is_available: v.isAvailable ?? true,
-          display_order: v.displayOrder ?? index,
+        };
+        if (hasImageColumn) {
           // Drop indices that no longer point at an image (the seller may have
           // deleted a photo in the same save), so the gallery never resolves to
           // a blank slide.
-          ...(hasImageColumn
-            ? {
-                image_indices: normalizeImageIndices(v.imageIndices, imageCount),
-              }
-            : {}),
-        }));
-        const { error: variationsError } = await supabase
+          patch.image_indices = normalizeImageIndices(v.imageIndices, imageCount);
+        }
+
+        const { error: variationError } = await supabase
           .from('retail_product_variations')
-          .insert(variationRecords);
-        if (variationsError) {
+          .update(patch)
+          .eq('id', v.id)
+          .eq('product_id', productId);
+
+        if (variationError) {
           console.error(
-            'Failed to update retail product variations:',
-            variationsError,
+            'Failed to update retail product variation:',
+            v.id,
+            variationError,
           );
         }
       }
@@ -2077,12 +2084,30 @@ export class RetailProductsService {
       ];
     }
 
+    // The pack stock matrix is empty for every product in practice, so falling
+    // straight to a single 'default' row left listings whose stock sat under a
+    // key the product page never asks for — each colour and size then read as
+    // out of stock. Derive the combinations from the variations just copied
+    // instead, which is exactly what the storefront looks up.
+    if (combinationKeys.length === 0 && variationRecords.length > 0) {
+      combinationKeys = this.buildCombinationKeysFromVariations(
+        variationRecords.map((v) => ({
+          variation_type: v.variation_type,
+          name: v.name,
+        })),
+      );
+    }
+
     const inventoryRecords =
       combinationKeys.length > 0
-        ? combinationKeys.map((key) => ({
+        ? combinationKeys.map((key, index) => ({
             product_id: retailProduct.id,
             combination_key: key,
-            stock_quantity: Math.floor(totalUnits / combinationKeys.length),
+            // Spread the units evenly, giving the remainder to the first rows
+            // so the per-combination stock still sums to what was imported.
+            stock_quantity:
+              Math.floor(totalUnits / combinationKeys.length) +
+              (index < totalUnits % combinationKeys.length ? 1 : 0),
             source_wholesale_order_item_id: null,
           }))
         : [

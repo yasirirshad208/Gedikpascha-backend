@@ -10,6 +10,11 @@ import {
   UpdateOrderStatusDto,
   UpdatePaymentStatusDto,
 } from './dto/order.dto';
+import {
+  planRetailProvisioning,
+  totalUnitsInPlan,
+} from '../../retail/products/retail-provisioning';
+import { clearCache } from '../../common/cache.util';
 
 @Injectable()
 export class OrdersService {
@@ -337,6 +342,15 @@ export class OrdersService {
   async updateOrderStatus(orderId: string, updateDto: UpdateOrderStatusDto) {
     const serviceClient = this.supabaseService.getServiceClient();
 
+    // Read the current status first: retail provisioning must run once, on the
+    // transition INTO delivered, not on every later save of a delivered order.
+    const { data: before } = await serviceClient
+      .from('wholesale_orders')
+      .select('status')
+      .eq('id', orderId)
+      .maybeSingle();
+    const wasDelivered = before?.status === 'delivered';
+
     const updateData: any = {
       status: updateDto.status,
     };
@@ -372,7 +386,254 @@ export class OrdersService {
       throw new BadRequestException(`Failed to update order: ${error.message}`);
     }
 
+    if (updateDto.status === 'delivered' && !wasDelivered) {
+      // Never let a provisioning problem fail the status update itself — the
+      // order really was delivered either way.
+      try {
+        await this.provisionRetailProductsForOrder(orderId);
+      } catch (provisionError) {
+        console.error(
+          'Failed to provision retail products for order',
+          orderId,
+          provisionError,
+        );
+      }
+    }
+
     return this.getOrderById(orderId);
+  }
+
+  /**
+   * Turns a delivered wholesale purchase into the buyer's retail listings.
+   *
+   * Replaces the auto_create_retail_products_from_order Postgres trigger, which
+   * keyed everything off the pack: it read wholesale_pack_stock_matrix (empty in
+   * production) and wholesale_pack_variations via pack_size_id (null on every
+   * order item), so it always fell through to a single 'default' stock row. The
+   * listing ended up with variations but no stock the storefront could find,
+   * and every colour and size read as out of stock.
+   *
+   * The purchase record is used instead, which knows exactly which colours and
+   * sizes were bought and in what quantity.
+   */
+  async provisionRetailProductsForOrder(orderId: string) {
+    const serviceClient = this.supabaseService.getServiceClient();
+
+    const { data: order } = await serviceClient
+      .from('wholesale_orders')
+      .select('id, user_id, sell_as_retailer')
+      .eq('id', orderId)
+      .maybeSingle();
+
+    if (!order?.sell_as_retailer || !order.user_id) return;
+
+    const { data: retailBrand } = await serviceClient
+      .from('retail_brands')
+      .select('id')
+      .eq('user_id', order.user_id)
+      .eq('status', 'approved')
+      .maybeSingle();
+
+    if (!retailBrand) return;
+
+    const { data: items } = await serviceClient
+      .from('wholesale_order_items')
+      .select('*')
+      .eq('order_id', orderId);
+
+    for (const item of items || []) {
+      await this.provisionRetailProductForItem(retailBrand.id, item);
+    }
+
+    clearCache('retail:');
+    clearCache('categories:');
+  }
+
+  private async provisionRetailProductForItem(
+    retailBrandId: string,
+    item: any,
+  ) {
+    const serviceClient = this.supabaseService.getServiceClient();
+
+    const { data: wholesaleProduct } = await serviceClient
+      .from('wholesale_products')
+      .select('*')
+      .eq('id', item.product_id)
+      .maybeSingle();
+    if (!wholesaleProduct) return;
+
+    const packQuantity = Number(item.pack_quantity) || 1;
+    const unitCost = Number(item.pack_price) / packQuantity;
+    const fallbackUnits = (Number(item.quantity) || 0) * packQuantity;
+
+    const plan = planRetailProvisioning({
+      selectedVariations: item.selected_variations,
+      totalUnits: fallbackUnits,
+    });
+    const units = totalUnitsInPlan(plan);
+
+    const { data: existing } = await serviceClient
+      .from('retail_products')
+      .select('id, stock_quantity')
+      .eq('retail_brand_id', retailBrandId)
+      .eq('source_wholesale_product_id', wholesaleProduct.id)
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    let retailProductId: string;
+
+    if (existing) {
+      retailProductId = existing.id;
+      await serviceClient
+        .from('retail_products')
+        .update({
+          stock_quantity: (Number(existing.stock_quantity) || 0) + units,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', retailProductId);
+    } else {
+      const suffix = Math.random().toString(36).slice(2, 8);
+      const { data: created, error: createError } = await serviceClient
+        .from('retail_products')
+        .insert({
+          retail_brand_id: retailBrandId,
+          name: wholesaleProduct.name,
+          slug: `${wholesaleProduct.slug || 'product'}-${suffix}`,
+          sku: `RTL-${Math.random().toString(36).slice(2, 10).toUpperCase()}`,
+          description: wholesaleProduct.description,
+          short_description: wholesaleProduct.short_description,
+          category_id: wholesaleProduct.category_id,
+          subcategory_id: wholesaleProduct.subcategory_id,
+          cost_price: unitCost,
+          retail_price: null, // the retailer sets this before activating
+          stock_quantity: units,
+          track_inventory: true,
+          source_wholesale_product_id: wholesaleProduct.id,
+          source_wholesale_slug: wholesaleProduct.slug,
+          is_auto_imported: true,
+          status: 'draft',
+          meta_title: wholesaleProduct.meta_title,
+          meta_description: wholesaleProduct.meta_description,
+          product_details: wholesaleProduct.product_details,
+        })
+        .select('id')
+        .single();
+
+      if (createError || !created) {
+        throw new BadRequestException(
+          `Failed to create retail product: ${createError?.message || 'unknown'}`,
+        );
+      }
+      retailProductId = created.id;
+
+      const { data: images } = await serviceClient
+        .from('wholesale_product_images')
+        .select('image_url, display_order, alt_text, is_primary')
+        .eq('product_id', wholesaleProduct.id)
+        .order('display_order', { ascending: true });
+
+      if (images?.length) {
+        await serviceClient.from('retail_product_images').insert(
+          images.map((img, index) => ({
+            product_id: retailProductId,
+            image_url: img.image_url,
+            display_order: img.display_order ?? index,
+            alt_text: img.alt_text,
+            is_primary: img.is_primary ?? index === 0,
+          })),
+        );
+      }
+    }
+
+    await this.syncPurchasedVariations(
+      retailProductId,
+      wholesaleProduct.id,
+      plan.variations,
+    );
+    await this.addPurchasedInventory(retailProductId, item.id, plan.inventory);
+  }
+
+  /**
+   * Adds any variation the retailer just bought that the listing lacks.
+   *
+   * Only ever adds: buying more of a colour must not disturb the image links
+   * the retailer already set on the variations that exist.
+   */
+  private async syncPurchasedVariations(
+    retailProductId: string,
+    wholesaleProductId: string,
+    planned: Array<{ variationType: string; name: string; displayOrder: number }>,
+  ) {
+    if (!planned.length) return;
+    const serviceClient = this.supabaseService.getServiceClient();
+
+    const { data: current } = await serviceClient
+      .from('retail_product_variations')
+      .select('variation_type, name')
+      .eq('product_id', retailProductId);
+
+    const seen = new Set(
+      (current || []).map(
+        (v: any) => `${String(v.variation_type).toLowerCase()}:${v.name}`,
+      ),
+    );
+
+    const missing = planned.filter(
+      (v) => !seen.has(`${v.variationType.toLowerCase()}:${v.name}`),
+    );
+    if (!missing.length) return;
+
+    // Colour swatches live on the wholesale pack rows, which name a colour as
+    // part of a combined label ("Füme Beyaz - 31"), so match on the prefix.
+    const { data: packColours } = await serviceClient
+      .from('wholesale_pack_variations')
+      .select('name, value, pack_size_id')
+      .not('value', 'is', null);
+
+    const swatchFor = (name: string): string | null => {
+      const match = (packColours || []).find((row: any) =>
+        String(row.name || '').startsWith(name),
+      );
+      return match?.value ?? null;
+    };
+
+    await serviceClient.from('retail_product_variations').insert(
+      missing.map((v) => ({
+        product_id: retailProductId,
+        variation_type: v.variationType,
+        name: v.name,
+        value: /colou?r/i.test(v.variationType) ? swatchFor(v.name) : null,
+        is_available: true,
+        display_order: v.displayOrder,
+      })),
+    );
+  }
+
+  /** Writes one stock row per purchased combination, keyed to this order item. */
+  private async addPurchasedInventory(
+    retailProductId: string,
+    orderItemId: string,
+    rows: Array<{ combinationKey: string; stockQuantity: number }>,
+  ) {
+    if (!rows.length) return;
+    const serviceClient = this.supabaseService.getServiceClient();
+
+    const { error } = await serviceClient.from('retail_product_inventory').upsert(
+      rows.map((row) => ({
+        product_id: retailProductId,
+        combination_key: row.combinationKey,
+        stock_quantity: row.stockQuantity,
+        source_wholesale_order_item_id: orderItemId,
+        added_at: new Date().toISOString(),
+      })),
+      { onConflict: 'product_id,combination_key,source_wholesale_order_item_id' },
+    );
+
+    if (error) {
+      throw new BadRequestException(
+        `Failed to record retail inventory: ${error.message}`,
+      );
+    }
   }
 
   async updatePaymentStatus(

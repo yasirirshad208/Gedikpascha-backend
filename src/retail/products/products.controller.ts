@@ -255,14 +255,12 @@ export class RetailProductsController {
         altText?: string;
         isPrimary?: boolean;
       }>;
+      // Retailers cannot add, rename or remove variations — those come from
+      // the wholesale purchase. Only the image links and availability of an
+      // existing variation can be changed.
       variations?: Array<{
-        variationType: string;
-        name: string;
-        value?: string;
+        id?: string;
         isAvailable?: boolean;
-        displayOrder?: number;
-        // 0-based indices into `images`; the gallery shows these when the
-        // variation is selected.
         imageIndices?: number[] | null;
       }>;
     },
