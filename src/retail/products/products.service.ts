@@ -22,6 +22,49 @@ const RETAIL_LIST_COLUMNS =
 export class RetailProductsService {
   constructor(private readonly supabaseService: SupabaseService) {}
 
+  /**
+   * Whether retail_product_variations.image_indices exists yet.
+   *
+   * The column is additive and arrives via migration, but code deploys before
+   * migrations get run. Selecting a column that does not exist fails the WHOLE
+   * query, which took every retail product page down with a 404 while the
+   * listing kept working. Probing once lets the storefront keep serving — the
+   * colour-to-image links are simply absent until the migration lands.
+   *
+   * Cached for the process lifetime: one extra query on first use, never again.
+   */
+  private variationImageColumnPresent: boolean | null = null;
+
+  private async hasVariationImageColumn(supabase: any): Promise<boolean> {
+    if (this.variationImageColumnPresent !== null) {
+      return this.variationImageColumnPresent;
+    }
+    const { error } = await supabase
+      .from('retail_product_variations')
+      .select('image_indices')
+      .limit(1);
+
+    // 42703 = undefined_column.
+    const missing = error?.code === '42703';
+    if (missing) {
+      console.warn(
+        '[retail] retail_product_variations.image_indices is missing. ' +
+          'Colour-to-image links are disabled until migration ' +
+          'retail/add_image_indices_to_retail_product_variations.sql is run.',
+      );
+    }
+    this.variationImageColumnPresent = !missing;
+    return this.variationImageColumnPresent;
+  }
+
+  /** Variation columns to select, minus the image link when it is not there. */
+  private async variationColumns(supabase: any): Promise<string> {
+    const base = 'id, variation_type, name, value, is_available, display_order';
+    return (await this.hasVariationImageColumn(supabase))
+      ? `${base}, image_indices`
+      : base;
+  }
+
   async getBrandCategories(brandId: string) {
    return cached(`retail:brand-categories:${brandId}`, TTL.medium, async () => {
     const supabase = this.supabaseService.getServiceClient();
@@ -258,9 +301,7 @@ export class RetailProductsService {
         .order('display_order', { ascending: true }),
       supabase
         .from('retail_product_variations')
-        .select(
-          'id, variation_type, name, value, is_available, display_order, image_indices',
-        )
+        .select(await this.variationColumns(supabase))
         .eq('product_id', productId)
         .order('display_order', { ascending: true }),
     ]);
@@ -567,6 +608,7 @@ export class RetailProductsService {
             .eq('product_id', productId);
           imageCount = count ?? null;
         }
+        const hasImageColumn = await this.hasVariationImageColumn(supabase);
         const variationRecords = updateData.variations.map((v, index) => ({
           product_id: productId,
           variation_type: v.variationType,
@@ -577,7 +619,11 @@ export class RetailProductsService {
           // Drop indices that no longer point at an image (the seller may have
           // deleted a photo in the same save), so the gallery never resolves to
           // a blank slide.
-          image_indices: normalizeImageIndices(v.imageIndices, imageCount),
+          ...(hasImageColumn
+            ? {
+                image_indices: normalizeImageIndices(v.imageIndices, imageCount),
+              }
+            : {}),
         }));
         const { error: variationsError } = await supabase
           .from('retail_product_variations')
@@ -1230,19 +1276,20 @@ export class RetailProductsService {
   async getProductBySlug(slug: string) {
    return cached(`retail:slug:${slug}`, TTL.short, async () => {
     const supabase = this.supabaseService.getServiceClient();
+    const variationCols = await this.variationColumns(supabase);
 
     // Get product by slug with all related data
-    const { data: products, error } = await supabase
-      .from('retail_products')
-      .select(
-        `
+    const productSelect: string = `
         *,
         retail_brands!inner(id, brand_name, display_name, logo_url, status, description),
         retail_product_images(id, image_url, display_order, is_primary),
-        retail_product_variations(id, variation_type, name, value, is_available, display_order, image_indices),
+        retail_product_variations(${variationCols}),
         retail_product_inventory(id, combination_key, stock_quantity)
-      `,
-      )
+      `;
+
+    const { data: productRows, error } = await supabase
+      .from('retail_products')
+      .select(productSelect)
       .eq('slug', slug)
       .eq('status', 'active')
       .eq('retail_brands.status', 'approved')
@@ -1257,11 +1304,12 @@ export class RetailProductsService {
         `Failed to load product: ${error.message || 'Unknown error'}`,
       );
     }
-    if (!products || products.length === 0) {
+    const products = (productRows || []) as any[];
+    if (products.length === 0) {
       throw new NotFoundException('Product not found');
     }
 
-    const product = products[0];
+    const product = products[0] as any;
 
     // Aggregate inventory by combination_key (multiple rows may exist per key)
     const rawInventory = product.retail_product_inventory || [];
@@ -1284,10 +1332,7 @@ export class RetailProductsService {
     product.retail_product_inventory = Array.from(inventoryMap.values());
 
     // Get related products (same brand)
-    const { data: relatedProducts } = await supabase
-      .from('retail_products')
-      .select(
-        `
+    const relatedSelect: string = `
         id,
         name,
         slug,
@@ -1295,9 +1340,12 @@ export class RetailProductsService {
         sale_percentage,
         retail_brands!inner(display_name, status),
         retail_product_images(image_url, is_primary),
-        retail_product_variations(id, variation_type, name, value, is_available, display_order, image_indices)
-      `,
-      )
+        retail_product_variations(${variationCols})
+      `;
+
+    const { data: relatedRows } = await supabase
+      .from('retail_products')
+      .select(relatedSelect)
       .eq('status', 'active')
       .eq('retail_brands.status', 'approved')
       .is('deleted_at', null)
@@ -1308,7 +1356,7 @@ export class RetailProductsService {
 
     return {
       ...product,
-      related_products: relatedProducts || [],
+      related_products: (relatedRows || []) as any[],
     };
    });
   }
