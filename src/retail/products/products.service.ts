@@ -33,12 +33,18 @@ export class RetailProductsService {
    *
    * Cached for the process lifetime: one extra query on first use, never again.
    */
-  private variationImageColumnPresent: boolean | null = null;
+  private variationImageColumnPresent = false;
+  private variationImageColumnCheckedAt = 0;
 
   private async hasVariationImageColumn(supabase: any): Promise<boolean> {
-    if (this.variationImageColumnPresent !== null) {
-      return this.variationImageColumnPresent;
-    }
+    // A positive answer is permanent — a column does not disappear. A negative
+    // one is re-checked, because the usual reason it is missing is a migration
+    // that has not run YET. Caching "missing" forever meant the column stayed
+    // invisible until the process was restarted, so a seller who ran the
+    // migration and then linked photos had them silently dropped on save.
+    if (this.variationImageColumnPresent) return true;
+    if (Date.now() - this.variationImageColumnCheckedAt < 60_000) return false;
+    this.variationImageColumnCheckedAt = Date.now();
     const { error } = await supabase
       .from('retail_product_variations')
       .select('image_indices')
